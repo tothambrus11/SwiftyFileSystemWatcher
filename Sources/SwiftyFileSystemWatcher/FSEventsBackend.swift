@@ -47,35 +47,53 @@
         stateQueue: queue, window: configuration.batchWindow, deliver: deliver)
     }
 
+    // Stream lifecycle calls (start, invalidate) run OFF `queue`: FSEvents synchronizes
+    // internally with its scheduling queue, so performing them while holding that queue can
+    // deadlock. State transitions stay on `queue`; a stream created concurrently with a
+    // conflicting `setRoots` or `stop` is detected at installation time and discarded.
+
     func setRoots(_ newRoots: [String]) {
-      queue.sync { [self] in
-        guard !stopped else { return }
-        destroyStream()
+      let old: FSEventStreamRef? = queue.sync { [self] in
+        guard !stopped else { return nil }
+        let o = stream
+        stream = nil
         index.removeAll()
         roots = newRoots.map(normalized)
         for root in roots { indexTree(at: root, reportingFiles: false) }
-        guard !roots.isEmpty else { return }
-        createStream()
+        return o
       }
+      release(old)
+      let watched: [String] = queue.sync { [self] in stopped ? [] : roots }
+      guard !watched.isEmpty, let s = makeStream(over: watched) else { return }
+      let accepted: Bool = queue.sync { [self] in
+        guard !stopped, roots == watched, stream == nil else { return false }
+        stream = s
+        return true
+      }
+      if !accepted { release(s) }
     }
 
     func stop() {
-      queue.sync { [self] in
-        guard !stopped else { return }
+      let old: FSEventStreamRef? = queue.sync { [self] in
+        guard !stopped else { return nil }
         stopped = true
-        destroyStream()
+        let o = stream
+        stream = nil
         index.removeAll()
         accumulator.invalidate()
+        return o
       }
+      release(old)
     }
 
     // MARK: - Stream lifecycle
 
-    /// Starts a stream over `roots`, scheduled on `queue`.
+    /// Returns a started stream over `watchedRoots`, delivering to `queue`, or `nil` if the
+    /// system refuses the stream.
     ///
     /// The stream context retains the backend until the stream is invalidated, so a scheduled
     /// callback can never observe a deallocated backend.
-    private func createStream() {
+    private func makeStream(over watchedRoots: [String]) -> FSEventStreamRef? {
       var context = FSEventStreamContext(
         version: 0,
         info: Unmanaged.passUnretained(self).toOpaque(),
@@ -90,22 +108,21 @@
         | kFSEventStreamCreateFlagNoDefer
       guard
         let s = FSEventStreamCreate(
-          kCFAllocatorDefault, fsEventsCallback, &context, roots as CFArray,
+          kCFAllocatorDefault, fsEventsCallback, &context, watchedRoots as CFArray,
           FSEventStreamEventId(kFSEventStreamEventIdSinceNow), 0.01,
           FSEventStreamCreateFlags(flags))
-      else { return }
+      else { return nil }
       FSEventStreamSetDispatchQueue(s, queue)
       FSEventStreamStart(s)
-      stream = s
+      return s
     }
 
-    /// Stops and releases the active stream, if any.
-    private func destroyStream() {
-      guard let s = stream else { return }
+    /// Stops, invalidates, and releases `s`, if non-`nil`; must not run on `queue`.
+    private func release(_ s: FSEventStreamRef?) {
+      guard let s = s else { return }
       FSEventStreamStop(s)
       FSEventStreamInvalidate(s)
       FSEventStreamRelease(s)
-      stream = nil
     }
 
     // MARK: - Event handling
