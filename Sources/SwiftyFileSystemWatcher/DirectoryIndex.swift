@@ -35,9 +35,14 @@ struct DirectoryIndex {
     let prefix = childPrefix(of: directory)
     for (key, names) in filesByDirectory where key == directory || key.hasPrefix(prefix) {
       filesByDirectory[key] = nil
-      for name in names { removed.append(key + "/" + name) }
+      for name in names { removed.append(childPrefix(of: key) + name) }
     }
     return removed.sorted()
+  }
+
+  /// Returns the reported file names in `directory`, or the empty set if it is untracked.
+  func files(in directory: String) -> Set<String> {
+    filesByDirectory[directory] ?? []
   }
 
   /// Returns the tracked directories at or below `directory`.

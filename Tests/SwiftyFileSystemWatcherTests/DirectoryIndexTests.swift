@@ -29,4 +29,18 @@ import Testing
     #expect(!index.containsFile(named: "a", in: "/r"))
   }
 
+  @Test func filesInReturnsTheTrackedNames() {
+    var index = DirectoryIndex()
+    index.addFile(named: "a.txt", in: "/r")
+    index.addFile(named: "b.txt", in: "/r")
+    #expect(index.files(in: "/r") == ["a.txt", "b.txt"])
+    #expect(index.files(in: "/untracked") == [])
+  }
+
+  @Test func fileSystemRootPathsAreSpelledWithoutADoubledSeparator() {
+    var index = DirectoryIndex()
+    index.addFile(named: "x", in: "/")
+    #expect(index.removeSubtree(at: "/") == ["/x"])
+  }
+
 }

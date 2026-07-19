@@ -109,6 +109,53 @@ import Testing
     watcher.stop()
   }
 
+  @Test func directoryReplacedAtTheSamePathReportsOldFilesDeletedAndNewOnesCreated() throws {
+    let root = try makeTemporaryDirectory()
+    let staging = try makeTemporaryDirectory()
+    defer {
+      removeDirectory(root)
+      removeDirectory(staging)
+    }
+    try makeDirectory(root + "/pkg")
+    try write("old", to: root + "/pkg/old.txt")
+    try makeDirectory(staging + "/replacement")
+    try write("new", to: staging + "/replacement/new.txt")
+    let collector = BatchCollector()
+    let watcher = try DirectoryWatcher(roots: [root], configuration: configuration) { (b) in
+      collector.receive(b)
+    }
+
+    try FileManager.default.moveItem(atPath: root + "/pkg", toPath: staging + "/out")
+    try FileManager.default.moveItem(atPath: staging + "/replacement", toPath: root + "/pkg")
+    #expect(collector.waitForEvent(path: root + "/pkg/old.txt", kind: .deleted))
+    #expect(collector.waitForEvent(path: root + "/pkg/new.txt", kind: .created))
+    watcher.stop()
+  }
+
+  @Test func rootMovedAwayReportsDeletionsAndStopsWatchingTheMovedTree() throws {
+    #if !os(Windows)
+      let root = try makeTemporaryDirectory()
+      let staging = try makeTemporaryDirectory()
+      defer {
+        removeDirectory(root)
+        removeDirectory(staging)
+      }
+      try write("a", to: root + "/a.txt")
+      let collector = BatchCollector()
+      let watcher = try DirectoryWatcher(roots: [root], configuration: configuration) { (b) in
+        collector.receive(b)
+      }
+
+      try FileManager.default.moveItem(atPath: root, toPath: staging + "/moved")
+      #expect(collector.waitForEvent(path: root + "/a.txt", kind: .deleted))
+      // The moved-away tree must not keep a live watch reporting phantom in-tree paths.
+      try write("p", to: staging + "/moved/phantom.txt")
+      Thread.sleep(forTimeInterval: 0.3)
+      #expect(collector.events.allSatisfy { (e) in !e.path.hasSuffix("phantom.txt") })
+      watcher.stop()
+    #endif
+  }
+
   @Test func recursiveDirectoryDeletionReportsItsFilesAsDeleted() throws {
     let root = try makeTemporaryDirectory()
     defer { removeDirectory(root) }

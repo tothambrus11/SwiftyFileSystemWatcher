@@ -78,6 +78,44 @@
       #expect(collector.events.isEmpty)
     }
 
+    @Test func moveSelfOnAStillPresentRootResynchronizesIt() throws {
+      let root = try makeTemporaryDirectory()
+      defer { removeDirectory(root) }
+      try write("a", to: root + "/a.txt")
+      let collector = BatchCollector()
+      let backend = try InotifyBackend(
+        configuration: WatchConfiguration(batchWindow: .milliseconds(25)),
+        deliver: { (b) in collector.receive(b) })
+      defer { backend.stop() }
+      backend.setRoots([root])
+
+      // A root's move-self with a directory still at its path means the root was replaced;
+      // the old tree's files are torn down and the successor's attached.
+      let descriptor = try #require(backend.watchDescriptorForTesting(of: root))
+      backend.injectForTesting(mask: 0x800, name: "", descriptor: descriptor)
+      #expect(collector.waitForEvent(path: root + "/a.txt", kind: .deleted))
+      #expect(collector.waitForEvent(path: root + "/a.txt", kind: .created))
+    }
+
+    @Test func overflowWhileDrainingARebuildDoesNotRetriggerARebuild() throws {
+      let root = try makeTemporaryDirectory()
+      defer { removeDirectory(root) }
+      let collector = BatchCollector()
+      let backend = try InotifyBackend(
+        configuration: WatchConfiguration(batchWindow: .milliseconds(25)),
+        deliver: { (b) in collector.receive(b) })
+      defer { backend.stop() }
+      backend.setRoots([root])
+
+      backend.injectOverflowDuringRebuildForTesting()
+      #expect(
+        collector.waitForBatches { (bs) in
+          bs.contains { (b) in b.mayHaveDroppedEvents }
+        })
+      try write("x", to: root + "/still-watched.txt")
+      #expect(collector.waitForEvent(path: root + "/still-watched.txt", kind: .created))
+    }
+
     @Test func watchInstallationFailuresFromResourceExhaustionAreSignaled() throws {
       let collector = BatchCollector()
       let backend = try InotifyBackend(

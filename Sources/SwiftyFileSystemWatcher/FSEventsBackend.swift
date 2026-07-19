@@ -67,10 +67,12 @@
         stream = nil
         index.removeAll()
         roots = newRoots.map(normalized)
-        kernelPrefixes = roots.compactMap { (r) in
+        // Longest kernel prefix first, so a root nested (via symlinks) inside another root's
+        // resolved tree wins over the enclosing root's shorter prefix.
+        kernelPrefixes = roots.compactMap { (r) -> (kernel: String, root: String)? in
           let kernel = resolvedKernelPath(of: r)
           return kernel == r ? nil : (kernel, r)
-        }
+        }.sorted { (l, r) in l.kernel.count > r.kernel.count }
         return o
       }
       release(old)
@@ -169,15 +171,19 @@
       }
 
       if flags & FSEventStreamEventFlags(kFSEventStreamEventFlagItemIsDir) != 0 {
+        let structural = FSEventStreamEventFlags(
+          kFSEventStreamEventFlagItemCreated | kFSEventStreamEventFlagItemRemoved
+            | kFSEventStreamEventFlagItemRenamed)
         if fileType(at: path) == .typeDirectory {
           let (parent, _) = splitPath(path)
-          // Only unknown directories are scanned: a directory already in the index has been
-          // walked before, and changes beneath it arrive as their own file events. Without
-          // this, every metadata touch on a known directory would cost a subtree walk.
-          if isAdmissible(parent), configuration.isDirectoryIncluded(path),
-            !index.containsDirectory(path)
-          {
+          guard isAdmissible(parent), configuration.isDirectoryIncluded(path) else { return }
+          if !index.containsDirectory(path) {
             indexTree(at: path, reportingFiles: true)
+          } else if flags & structural != 0 {
+            // A known path with structural flags may be a *different* directory now (renamed
+            // away and replaced within one latency window); reconcile instead of trusting
+            // the index. Metadata-only touches skip the walk.
+            reconcileTree(at: path)
           }
         } else if index.containsDirectory(path) {
           removeTree(at: path)
@@ -218,6 +224,26 @@
       }
     }
 
+    /// Re-synchronizes the indexed subtree at `directory` with the disk, reporting indexed
+    /// files that vanished as deleted and newly present files as created.
+    ///
+    /// Runs in time proportional to the subtree's on-disk size plus its indexed size.
+    private func reconcileTree(at directory: String) {
+      for d in index.directories(inSubtreeAt: directory) {
+        for name in index.files(in: d) {
+          let path = childPrefix(of: d) + name
+          if fileType(at: path) != .typeRegular {
+            index.removeFile(named: name, in: d)
+            accumulator.append(FileSystemEvent(path: path, kind: .deleted))
+          }
+        }
+        if fileType(at: d) != .typeDirectory {
+          _ = index.removeSubtree(at: d)
+        }
+      }
+      indexTree(at: directory, reportingFiles: true)
+    }
+
     /// Rebuilds the index from the file system without reporting, after the kernel signaled
     /// that events were dropped.
     private func resynchronize() {
@@ -232,6 +258,8 @@
 
     /// Returns `kernelPath` re-expressed in terms of the registered roots, or unchanged if it
     /// lies under no root's resolved path.
+    ///
+    /// Runs one prefix comparison per mapped root.
     private func registeredPath(forKernelPath kernelPath: String) -> String {
       for (kernel, root) in kernelPrefixes {
         if kernelPath == kernel { return root }

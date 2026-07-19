@@ -15,7 +15,7 @@ func indexTree(
   index.addDirectory(directory)
   let listing = listDirectory(at: directory)
   for name in listing.files {
-    let path = directory + "/" + name
+    let path = childPrefix(of: directory) + name
     guard configuration.isFileIncluded(path) else { continue }
     let isNew = !index.containsFile(named: name, in: directory)
     index.addFile(named: name, in: directory)
@@ -24,7 +24,7 @@ func indexTree(
     }
   }
   for name in listing.subdirectories {
-    let child = directory + "/" + name
+    let child = childPrefix(of: directory) + name
     guard configuration.isDirectoryIncluded(child) else { continue }
     indexTree(
       at: child, configuration: configuration, index: &index, accumulator: accumulator,

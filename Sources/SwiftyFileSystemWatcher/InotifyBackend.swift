@@ -66,6 +66,9 @@
     /// `true` iff `stop` has completed.
     private var stopped = false
 
+    /// `true` while draining the events queued by a rebuild's own watch teardown.
+    private var suppressesOverflowResynchronization = false
+
     /// Creates a backend delivering batches to `deliver`, with no roots watched yet.
     init(
       configuration: WatchConfiguration,
@@ -95,12 +98,19 @@
 
     /// Removes every watch and mapping, then re-registers watches under `roots` without
     /// reporting; must run on `queue`.
+    ///
+    /// The teardown itself queues one `IN_IGNORED` per removed watch, which on large trees
+    /// can overflow the kernel queue; the drain at the end consumes them with
+    /// overflow-triggered rebuilds suppressed, so a rebuild cannot re-trigger itself.
     private func rebuildWatchesLocked() {
       for (d, _) in pathByDescriptor { inotify_rm_watch(descriptor, d) }
       pathByDescriptor.removeAll()
       descriptorByPath.removeAll()
       index.removeAll()
       for root in roots { addTree(at: root, reportingFiles: false) }
+      suppressesOverflowResynchronization = true
+      readEvents()
+      suppressesOverflowResynchronization = false
     }
 
     func stop() {
@@ -186,6 +196,16 @@
       queue.sync { descriptorByPath[directory] }
     }
 
+    /// Simulates an overflow arriving while a rebuild drains its own teardown events, which
+    /// real kernels produce only on trees too large for tests; for tests.
+    func injectOverflowDuringRebuildForTesting() {
+      queue.sync {
+        suppressesOverflowResynchronization = true
+        process(mask: Self.inQueueOverflow, name: "", in: -1)
+        suppressesOverflowResynchronization = false
+      }
+    }
+
     // MARK: - Event handling
 
     /// Drains and processes all readable events.
@@ -227,7 +247,7 @@
     private func process(mask: UInt32, name: String, in eventDescriptor: Int32) {
       if mask & Self.inQueueOverflow != 0 {
         accumulator.noteDroppedEvents()
-        resynchronize()
+        if !suppressesOverflowResynchronization { resynchronize() }
         return
       }
       if mask & Self.inIgnored != 0 {
@@ -246,15 +266,27 @@
         return
       }
       if mask & (Self.inDeleteSelf | Self.inMoveSelf) != 0 {
-        // The watched directory itself is gone or was moved to an unknown location. If a
-        // directory still exists at the recorded path, another watch already owns it (the
-        // parent's paired moved-from/moved-to events re-registered it); tearing it down
-        // again would falsely report its files deleted.
-        if fileType(at: directory) != .typeDirectory { removeTree(at: directory) }
+        // The watched directory itself is gone or was moved to an unknown location.
+        if roots.contains(directory) {
+          // A root has no parent watch to reconcile a replacement, so its self events do
+          // the whole job: tear down the departed tree (the watch would otherwise follow
+          // the moved inode, reporting phantom in-tree events) and attach any successor
+          // directory created at the same path.
+          removeTree(at: directory)
+          if fileType(at: directory) == .typeDirectory {
+            addTree(at: directory, reportingFiles: true)
+          }
+        } else if fileType(at: directory) != .typeDirectory {
+          // For non-roots, a directory still present at the recorded path means another
+          // watch already owns it (the parent's paired moved-from/moved-to events
+          // re-registered it); tearing it down again would falsely report its files
+          // deleted.
+          removeTree(at: directory)
+        }
         return
       }
 
-      let path = directory + "/" + name
+      let path = childPrefix(of: directory) + name
       if mask & Self.inIsDir != 0 {
         if mask & (Self.inCreate | Self.inMovedTo) != 0 {
           // A directory joined the tree; its contents predate the watch, so scan and report.

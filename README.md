@@ -78,6 +78,11 @@ decisions.
 - When `DirectoryWatcher.init` or `setRoots(_:)` returns, the watch is live.
 - Windows watches at most 60 roots (a `WaitForMultipleObjects` limit); excess roots are
   dropped and signaled via `mayHaveDroppedEvents`.
+- Replacing a watched *root* directory itself: its files are reported deleted, and a
+  successor directory already present at the root's path is re-attached (Linux/macOS). A
+  root recreated later is not re-attached automatically — call `setRoots` to re-anchor.
+  Windows cannot detect root replacement at all (the kernel handle follows the original
+  directory).
 
 ## Holding a watcher in a class
 

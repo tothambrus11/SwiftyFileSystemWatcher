@@ -316,7 +316,7 @@
 
     /// Classifies and reports one change observed under `root`; called on `queue`.
     private func process(_ change: Change, under root: String) {
-      let path = root + "/" + change.relativePath
+      let path = childPrefix(of: root) + change.relativePath
       switch Int32(change.action) {
       case FILE_ACTION_ADDED, FILE_ACTION_RENAMED_NEW_NAME:
         processAppeared(path)
