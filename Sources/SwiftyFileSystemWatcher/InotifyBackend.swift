@@ -152,6 +152,19 @@
       for root in roots { addTree(at: root, reportingFiles: false) }
     }
 
+    // MARK: - Testing support
+
+    /// Processes a synthetic kernel event, for exercising paths that real kernels produce
+    /// non-deterministically (queue overflows, watch invalidations).
+    func injectForTesting(mask: UInt32, name: String, descriptor d: Int32) {
+      queue.sync { process(mask: mask, name: name, in: d) }
+    }
+
+    /// Returns the watch descriptor registered for `directory`, if any; for tests.
+    func watchDescriptorForTesting(of directory: String) -> Int32? {
+      queue.sync { descriptorByPath[directory] }
+    }
+
     // MARK: - Event handling
 
     /// Drains and processes all readable events.

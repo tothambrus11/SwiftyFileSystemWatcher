@@ -44,8 +44,8 @@ extension StringProtocol where SubSequence == Substring {
   /// Returns the suffix after the last occurrence of `separator`, or the whole string if
   /// `separator` does not occur.
   fileprivate func suffix(after separator: Character) -> Substring {
-    if let i = lastIndex(of: separator) { return self[index(after: i)...] }
-    return self[...]
+    guard let i = lastIndex(of: separator) else { return self[startIndex...] }
+    return self[index(after: i)...]
   }
 
 }

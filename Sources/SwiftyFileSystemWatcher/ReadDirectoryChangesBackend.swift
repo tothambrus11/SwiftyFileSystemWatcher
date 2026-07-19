@@ -163,6 +163,19 @@
       workerExited = exited
       let watchedRoots = roots
 
+      /// A `HANDLE` transportable into the worker closure.
+      ///
+      /// Safety of `@unchecked Sendable`: `HANDLE` is a raw pointer, which Swift cannot prove
+      /// thread-safe; ownership protocol makes it so — the worker is the handle's only user
+      /// until `stopWorker` observes the exit semaphore.
+      struct StopHandle: @unchecked Sendable {
+
+        /// The wrapped handle.
+        let value: HANDLE
+
+      }
+      let stopHandle = StopHandle(value: stop)
+
       DispatchQueue.global(qos: .userInitiated).async { [weak self, watchedRoots] in
         var contexts: [RootContext] = []
         for root in watchedRoots {
@@ -174,7 +187,7 @@
         }
         primed.signal()
 
-        var waitHandles: [HANDLE?] = [stop] + contexts.map { (c) in c.event }
+        var waitHandles: [HANDLE?] = [stopHandle.value] + contexts.map { (c) in c.event }
         while true {
           let result = waitHandles.withUnsafeBufferPointer { (h) in
             WaitForMultipleObjects(DWORD(h.count), h.baseAddress, false, DWORD(0xFFFF_FFFF))

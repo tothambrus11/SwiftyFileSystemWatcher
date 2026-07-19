@@ -30,10 +30,9 @@ struct DirectoryIndex {
   mutating func removeSubtree(at directory: String) -> [String] {
     var removed: [String] = []
     let prefix = directory + "/"
-    for key in filesByDirectory.keys where key == directory || key.hasPrefix(prefix) {
-      for name in filesByDirectory.removeValue(forKey: key) ?? [] {
-        removed.append(key + "/" + name)
-      }
+    for (key, names) in filesByDirectory where key == directory || key.hasPrefix(prefix) {
+      filesByDirectory[key] = nil
+      for name in names { removed.append(key + "/" + name) }
     }
     return removed.sorted()
   }

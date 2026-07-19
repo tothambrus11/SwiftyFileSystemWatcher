@@ -13,6 +13,15 @@ concurrency:
   cancel-in-progress: true
 
 jobs:
+  line-length:
+    name: "Line length"
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v6
+
+      - name: Check max line length of 100 characters
+        run: "! grep -rnE --include=*.swift --exclude-dir=.build '.{101,}' ."
+
   lint:
     name: Check formatting & linting
     runs-on: ubuntu-24.04
@@ -48,3 +57,51 @@ jobs:
 
       - name: Build and test
         run: swift test --verbose
+
+  coverage:
+    name: Coverage
+    runs-on: ubuntu-24.04
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@v6
+
+      - name: Set up Swift
+        uses: SwiftyLab/setup-swift@latest
+        with:
+          swift-version: 6.3.0
+
+      - name: Measure line coverage
+        id: cov
+        run: |
+          set -euo pipefail
+          swift test --enable-code-coverage
+          BIN=$(swift build --show-bin-path)
+          LLVM_COV="$(dirname "$(realpath "$(which swift)")")/llvm-cov"
+          PCT=$("$LLVM_COV" export -summary-only \
+            "$BIN/SwiftyFileSystemWatcherPackageTests.xctest" \
+            -instr-profile "$BIN/codecov/default.profdata" \
+            -ignore-filename-regex='(Tests|\.build)/' \
+            | python3 -c 'import json,sys; \
+              print(round(json.load(sys.stdin)["data"][0]["totals"]["lines"]["percent"], 1))')
+          echo "Line coverage: $PCT%"
+          echo "percent=$PCT" >> "$GITHUB_OUTPUT"
+
+      - name: Publish coverage badge
+        if: github.ref == 'refs/heads/main'
+        run: |
+          set -euo pipefail
+          PCT="${{ steps.cov.outputs.percent }}"
+          COLOR=$(python3 -c "print('brightgreen' if float('$PCT') >= 95 \
+            else 'yellow' if float('$PCT') >= 80 else 'red')")
+          DIR=$(mktemp -d)
+          printf '{"schemaVersion":1,"label":"coverage","message":"%s%%","color":"%s"}' \
+            "$PCT" "$COLOR" > "$DIR/coverage.json"
+          cd "$DIR"
+          git init -q -b badges
+          git -c user.name=github-actions -c user.email=actions@github.com add coverage.json
+          git -c user.name=github-actions -c user.email=actions@github.com \
+            commit -qm "Update coverage badge"
+          git push -f \
+            "https://x-access-token:${{ github.token }}@github.com/${{ github.repository }}.git" \
+            badges:badges

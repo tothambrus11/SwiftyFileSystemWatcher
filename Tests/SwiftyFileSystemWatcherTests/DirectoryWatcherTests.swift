@@ -2,7 +2,7 @@ import Foundation
 import SwiftyFileSystemWatcher
 import Testing
 
-@Suite struct DirectoryWatcherTests {
+@Suite(.serialized) struct DirectoryWatcherTests {
 
   /// The default configuration used by the tests.
   private var configuration: WatchConfiguration {
@@ -271,6 +271,7 @@ import Testing
     defer { removeDirectory(root) }
     let watcher = try DirectoryWatcher.streaming(roots: [root], configuration: configuration)
 
+    watcher.setRoots([root])
     try write("x", to: root + "/x.txt")
     var received: [FileSystemEvent] = []
     for await batch in watcher.batches {

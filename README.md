@@ -1,7 +1,12 @@
 # SwiftyFileSystemWatcher
 
-Recursive, multi-root file system watching for Swift on **Linux**, **macOS**, and **Windows**,
-with batching, filtering, and a linear (non-copyable) resource API.
+[![CI](https://github.com/tothambrus11/SwiftyFileSystemWatcher/actions/workflows/ci.yml/badge.svg)](https://github.com/tothambrus11/SwiftyFileSystemWatcher/actions/workflows/ci.yml)
+![Swift 6.2+](https://img.shields.io/badge/Swift-6.2%2B-F05138?logo=swift&logoColor=white)
+![Platforms](https://img.shields.io/badge/platforms-Linux%20%7C%20macOS%20%7C%20Windows-blue)
+[![Coverage](https://img.shields.io/endpoint?url=https%3A%2F%2Fraw.githubusercontent.com%2Ftothambrus11%2FSwiftyFileSystemWatcher%2Fbadges%2Fcoverage.json)](https://github.com/tothambrus11/SwiftyFileSystemWatcher/actions/workflows/ci.yml)
+
+Recursive, multi-root file system watching for Swift, with batching, filtering, and a linear
+(non-copyable) resource API. No dependencies.
 
 ```swift
 import SwiftyFileSystemWatcher
@@ -28,54 +33,50 @@ for await batch in watcher.batches {
 
 ## Why another watcher?
 
-Existing Swift packages either aren't recursive on Linux (each inotify watch covers a single
-directory; several libraries watch only the root and allocate one inotify *instance* per
-directory, hitting the default limit of 128 instances), are macOS-only, or deliver raw,
-unbatched kernel events with no overflow signal. SwiftyFileSystemWatcher was built for a
-language server that needs to watch workspace trees reliably on all three platforms:
+Existing Swift packages are either not recursive on Linux, Apple-only, or forward raw kernel
+events with no batching and no overflow signal. This library watches whole trees on Linux
+(one inotify instance for everything), macOS (FSEvents), and Windows (`ReadDirectoryChangesW`
+with subtree watching), attaches directories created or moved in later, replaces roots
+atomically via `setRoots(_:)`, coalesces bursts into batches, filters files and directories at
+the source, and reports kernel-side event loss instead of hiding it.
 
-- **Recursive & dynamic** — directories created or moved into the tree are attached
-  automatically, and their pre-existing contents are reported as created.
-- **Multi-root with replacement** — `setRoots(_:)` atomically replaces the watched set
-  (e.g. on `workspace/didChangeWorkspaceFolders`). When it returns, the new watch is live.
-- **One kernel facility for everything** — a single inotify instance (Linux), a single
-  FSEvents stream (macOS), one `ReadDirectoryChangesW` per root with `bWatchSubtree` (Windows).
-- **Batched** — bursts (editor save storms, branch switches) coalesce into one `EventBatch`
-  after a configurable quiet window.
-- **Filtered at the source** — file and directory predicates; excluded directories
-  (hidden ones by default) are never even watched on Linux/macOS.
-- **Honest about loss** — kernel queue overflows set `mayHaveDroppedEvents` instead of
-  silently dropping changes; consumers rescan.
-- **Synthesized subtree deletions** — a directory renamed out of the tree produces `deleted`
-  events for the files that were under it, which no kernel reports per-file.
-- **Linear resource** — `DirectoryWatcher` is `~Copyable`: the watch can't be leaked by an
-  extra copy or used after `stop()`; its lifetime is the value's lifetime.
+## Guarantees
 
-## Semantics
+These hold for any sequence of file system operations (and are enforced by randomized stress
+tests on all three platforms):
 
-- **Event kinds are advisory.** Kernels coalesce and reorder; an atomic save can surface as
-  `created`, a write during an overflow as `created` instead of `modified`. Re-read the file;
-  never branch on the kind for content decisions.
+- The first event for a file that was not present when watching started is `created`;
+  `modified` and `deleted` are only ever reported for files previously reported or initially
+  present. No `created` is repeated without an intervening `deleted`.
+- A consumer that folds events over the initial directory listing ends up believing exactly
+  the set of files that is on disk, once the tree is quiescent — including files under
+  directories that were moved into or out of the tree, whose events are synthesized.
+- Only files admitted by `isFileIncluded` in directories admitted by `isDirectoryIncluded`
+  are reported; excluded directories are never even watched on Linux and macOS.
+- If the kernel drops events (queue overflow), the next batch has `mayHaveDroppedEvents`
+  set and the guarantees above are suspended until the consumer re-scans.
+
+Event *kinds* remain advisory: kernels coalesce rapid sequences, so an atomic save may
+surface as `created` or `modified`. Re-read the file; never branch on the kind for content
+decisions.
+
+## Semantics notes
+
 - Paths are absolute; on Windows they are normalized to forward slashes. Give roots as
-  canonical (symlink-free) paths: event paths are derived from the kernel's view, which
+  canonical (symlink-free) paths — event paths are derived from the kernel's view, which
   resolves symlinks (e.g. `/var` vs `/private/var` on macOS).
 - Files present when a root starts being watched are indexed silently, not reported.
 - Symbolic links are not followed.
 - `onBatch` runs on an internal serial queue; it may call `setRoots` but should not block.
+- When `DirectoryWatcher.init` or `setRoots(_:)` returns, the watch is live.
 
 ## Requirements
 
-Swift 6.2+, macOS 13+/Linux/Windows. No dependencies.
+Swift 6.2+; Linux, macOS 13+, or Windows. No dependencies.
 
-## Development
+## Contributing
 
-```sh
-swift test        # run tests
-./lint.sh         # check formatting
-./format.sh       # apply formatting
-```
-
-Coding conventions live in [CONVENTIONS.md](CONVENTIONS.md).
+See [CONTRIBUTING.md](CONTRIBUTING.md).
 
 ## License
 
