@@ -58,7 +58,9 @@ tests on all three platforms):
   watched — the next batch has `mayHaveDroppedEvents` set and the guarantees above are
   suspended until the consumer re-scans.
 - `setRoots(_:)` re-anchors the guarantees: list the new roots after it returns and fold
-  subsequent events over that listing.
+  subsequent events over that listing. `configuration.admittedFiles(under:)` produces that
+  listing with exactly the watcher's semantics, and doubles as the re-scan after
+  `mayHaveDroppedEvents`.
 
 Event *kinds* remain advisory: kernels coalesce rapid sequences, so an atomic save may
 surface as `created` or `modified`. Re-read the file; never branch on the kind for content
@@ -66,15 +68,39 @@ decisions.
 
 ## Semantics notes
 
-- Paths are absolute; on Windows they are normalized to forward slashes. Give roots as
-  canonical (symlink-free) paths — event paths are derived from the kernel's view, which
-  resolves symlinks (e.g. `/var` vs `/private/var` on macOS).
+- Paths are absolute; on Windows they are normalized to forward slashes. Event paths are
+  expressed in terms of the registered roots even where the kernel reports symlink-resolved
+  paths (macOS's `/var` vs `/private/var`); symlinked *intermediate* directories inside a
+  tree are not followed.
 - Files present when a root starts being watched are indexed silently, not reported.
 - Symbolic links are not followed.
 - `onBatch` runs on an internal serial queue; it may call `setRoots` but should not block.
 - When `DirectoryWatcher.init` or `setRoots(_:)` returns, the watch is live.
 - Windows watches at most 60 roots (a `WaitForMultipleObjects` limit); excess roots are
   dropped and signaled via `mayHaveDroppedEvents`.
+
+## Holding a watcher in a class
+
+`DirectoryWatcher` is non-copyable, and Swift does not allow consuming a value out of class
+storage. Store it as an optional property, borrow it in place, and stop it by assigning `nil`:
+
+```swift
+final class Service {
+  private var watcher: DirectoryWatcher?
+
+  func start() throws {
+    watcher = try DirectoryWatcher(roots: roots) { batch in ... }
+  }
+
+  func reconfigure(_ roots: [String]) {
+    watcher?.setRoots(roots)  // borrows in place
+  }
+
+  func shutdown() {
+    watcher = nil  // destroys the value, stopping the watch
+  }
+}
+```
 
 ## Requirements
 

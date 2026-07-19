@@ -40,6 +40,37 @@ public struct WatchConfiguration: Sendable {
 
 }
 
+extension WatchConfiguration {
+
+  /// Returns the files currently admitted by this configuration under `roots`, following the
+  /// same semantics as watching: regular files passing the file filter, in roots and
+  /// descendant directories admitted by the directory filter, without following symbolic
+  /// links.
+  ///
+  /// Use this to take the anchor listing that events are folded over (right after
+  /// `DirectoryWatcher.init` or `setRoots` returns) and to re-scan after a batch reported
+  /// `mayHaveDroppedEvents`.
+  ///
+  /// Runs in time proportional to the total size of the admitted trees.
+  public func admittedFiles(under roots: [String]) -> Set<String> {
+    var result: Set<String> = []
+    var frontier = roots.map(normalized)
+    while let directory = frontier.popLast() {
+      let listing = listDirectory(at: directory)
+      for name in listing.files {
+        let path = childPrefix(of: directory) + name
+        if isFileIncluded(path) { result.insert(path) }
+      }
+      for name in listing.subdirectories {
+        let child = childPrefix(of: directory) + name
+        if isDirectoryIncluded(child) { frontier.append(child) }
+      }
+    }
+    return result
+  }
+
+}
+
 extension StringProtocol where SubSequence == Substring {
 
   /// Returns the suffix after the last occurrence of `separator`, or the whole string if

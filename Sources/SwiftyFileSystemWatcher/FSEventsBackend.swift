@@ -31,6 +31,14 @@
     /// The currently watched root directories.
     private var roots: [String] = []
 
+    /// For each root whose kernel-resolved path differs, the resolved path and the root.
+    ///
+    /// FSEvents reports fully symlink-resolved paths (`/private/var/...`), while consumers
+    /// reason in terms of the roots they registered (`/var/...` — which Foundation's own
+    /// `resolvingSymlinksInPath` deliberately leaves unresolved). Event paths are mapped back
+    /// into the registered namespace so guarantees hold in the consumer's terms.
+    private var kernelPrefixes: [(kernel: String, root: String)] = []
+
     /// The reported files under each watched directory.
     private var index = DirectoryIndex()
 
@@ -59,6 +67,10 @@
         stream = nil
         index.removeAll()
         roots = newRoots.map(normalized)
+        kernelPrefixes = roots.compactMap { (r) in
+          let kernel = resolvedKernelPath(of: r)
+          return kernel == r ? nil : (kernel, r)
+        }
         return o
       }
       release(old)
@@ -148,7 +160,7 @@
     /// subtree's size; all other events run in time proportional to the path's depth.
     fileprivate func process(path rawPath: String, flags: FSEventStreamEventFlags) {
       guard !stopped else { return }
-      let path = normalized(rawPath)
+      let path = registeredPath(forKernelPath: normalized(rawPath))
 
       if flags & FSEventStreamEventFlags(kFSEventStreamEventFlagMustScanSubDirs) != 0 {
         accumulator.noteDroppedEvents()
@@ -218,6 +230,26 @@
       isAdmissibleDirectory(directory, roots: roots, configuration: configuration)
     }
 
+    /// Returns `kernelPath` re-expressed in terms of the registered roots, or unchanged if it
+    /// lies under no root's resolved path.
+    private func registeredPath(forKernelPath kernelPath: String) -> String {
+      for (kernel, root) in kernelPrefixes {
+        if kernelPath == kernel { return root }
+        if kernelPath.hasPrefix(childPrefix(of: kernel)) {
+          return root + kernelPath.dropFirst(kernel.count)
+        }
+      }
+      return kernelPath
+    }
+
+  }
+
+  /// Returns the fully symlink-resolved form of `path` per `realpath(3)`, or `path` if
+  /// resolution fails.
+  private func resolvedKernelPath(of path: String) -> String {
+    guard let resolved = realpath(path, nil) else { return path }
+    defer { free(resolved) }
+    return String(cString: resolved)
   }
 
   /// The C callback of `FSEventsBackend`'s stream; runs on the backend's queue.

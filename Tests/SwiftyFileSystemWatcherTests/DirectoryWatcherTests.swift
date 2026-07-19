@@ -242,7 +242,8 @@ import Testing
       collector.receive(b)
     }
 
-    let name = "árvíztűrő tükörfúrógép %#?.txt"
+    // No "?": it is an illegal filename character on Windows.
+    let name = "árvíztűrő tükörfúrógép %#.txt"
     try write("x", to: root + "/" + name)
     #expect(collector.waitForEvent(path: root + "/" + name, kind: .created))
     watcher.stop()
