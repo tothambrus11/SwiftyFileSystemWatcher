@@ -14,7 +14,7 @@
   /// Safety of `@unchecked Sendable`: all mutable state is confined to `queue` except the
   /// worker's own resources, which no other thread touches; the immutable stored properties
   /// are either `Sendable` or thread-safe (`EventAccumulator`).
-  final class ReadDirectoryChangesBackend: WatcherBackend, @unchecked Sendable {
+  final class WindowsReadDirectoryChangesBackend: WatcherBackend, @unchecked Sendable {
 
     /// The changes the kernel is asked to report.
     private static let notifyFilter = DWORD(
@@ -122,7 +122,7 @@
         self.overlapped = .allocate(capacity: 1)
         self.overlapped.initialize(to: OVERLAPPED())
         self.buffer = .allocate(
-          byteCount: ReadDirectoryChangesBackend.bufferSize,
+          byteCount: WindowsReadDirectoryChangesBackend.bufferSize,
           alignment: MemoryLayout<DWORD>.alignment)
       }
 
@@ -141,8 +141,8 @@
       func arm() -> Bool {
         var bytesReturned = DWORD(0)
         let ok = ReadDirectoryChangesW(
-          handle, buffer, DWORD(ReadDirectoryChangesBackend.bufferSize), true,
-          ReadDirectoryChangesBackend.notifyFilter, &bytesReturned, overlapped, nil)
+          handle, buffer, DWORD(WindowsReadDirectoryChangesBackend.bufferSize), true,
+          WindowsReadDirectoryChangesBackend.notifyFilter, &bytesReturned, overlapped, nil)
         return ok || GetLastError() == DWORD(ERROR_IO_PENDING)
       }
 
@@ -226,7 +226,7 @@
             if !shuttingDown { self?.noteOverflow(in: g) }
             break
           }
-          if key == ReadDirectoryChangesBackend.shutdownKey {
+          if key == WindowsReadDirectoryChangesBackend.shutdownKey {
             // Cancel every outstanding read; their completion packets drain below, after
             // which the contexts' storage can be released safely.
             shuttingDown = true

@@ -14,7 +14,7 @@
   /// Safety of `@unchecked Sendable`: all mutable state is confined to `queue`, which is also
   /// the stream's dispatch queue; the immutable stored properties are either `Sendable` or
   /// thread-safe (`EventAccumulator`).
-  final class FSEventsBackend: WatcherBackend, @unchecked Sendable {
+  final class MacOSFSEventsBackend: WatcherBackend, @unchecked Sendable {
 
     /// The serial queue confining all mutable state and running the stream's callback.
     private let queue = DispatchQueue(label: "swifty-file-system-watcher.fsevents")
@@ -127,10 +127,10 @@
         version: 0,
         info: Unmanaged.passUnretained(self).toOpaque(),
         retain: { (info) in
-          _ = Unmanaged<FSEventsBackend>.fromOpaque(info!).retain()
+          _ = Unmanaged<MacOSFSEventsBackend>.fromOpaque(info!).retain()
           return info
         },
-        release: { (info) in Unmanaged<FSEventsBackend>.fromOpaque(info!).release() },
+        release: { (info) in Unmanaged<MacOSFSEventsBackend>.fromOpaque(info!).release() },
         copyDescription: nil)
       let flags =
         kFSEventStreamCreateFlagUseCFTypes | kFSEventStreamCreateFlagFileEvents
@@ -280,10 +280,10 @@
     return String(cString: resolved)
   }
 
-  /// The C callback of `FSEventsBackend`'s stream; runs on the backend's queue.
+  /// The C callback of `MacOSFSEventsBackend`'s stream; runs on the backend's queue.
   private let fsEventsCallback: FSEventStreamCallback = {
     (_, info, count, paths, flags, _) in
-    let backend = Unmanaged<FSEventsBackend>.fromOpaque(info!).takeUnretainedValue()
+    let backend = Unmanaged<MacOSFSEventsBackend>.fromOpaque(info!).takeUnretainedValue()
     let pathArray = Unmanaged<CFArray>.fromOpaque(paths).takeUnretainedValue() as! [String]
     for i in 0 ..< count {
       backend.process(path: pathArray[i], flags: flags[i])

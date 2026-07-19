@@ -12,7 +12,7 @@
   ///
   /// Safety of `@unchecked Sendable`: all mutable state is confined to `queue`; the immutable
   /// stored properties are either `Sendable` or thread-safe (`EventAccumulator`).
-  final class InotifyBackend: WatcherBackend, @unchecked Sendable {
+  final class LinuxInotifyBackend: WatcherBackend, @unchecked Sendable {
 
     // inotify constants (asm-generic/inotify.h, fcntl.h); spelled here because Glibc's
     // importer does not reliably expose the macros.

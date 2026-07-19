@@ -20,7 +20,7 @@
       defer { removeDirectory(root) }
       try write("a", to: root + "/a.txt")
       let collector = BatchCollector()
-      let backend = try InotifyBackend(
+      let backend = try LinuxInotifyBackend(
         configuration: WatchConfiguration(batchWindow: .milliseconds(25)),
         deliver: { (b) in collector.receive(b) })
       defer { backend.stop() }
@@ -47,7 +47,7 @@
       try makeDirectory(root + "/mnt")
       try write("a", to: root + "/mnt/a.txt")
       let collector = BatchCollector()
-      let backend = try InotifyBackend(
+      let backend = try LinuxInotifyBackend(
         configuration: WatchConfiguration(batchWindow: .milliseconds(25)),
         deliver: { (b) in collector.receive(b) })
       defer { backend.stop() }
@@ -64,7 +64,7 @@
       try makeDirectory(root + "/sub")
       try write("a", to: root + "/sub/a.txt")
       let collector = BatchCollector()
-      let backend = try InotifyBackend(
+      let backend = try LinuxInotifyBackend(
         configuration: WatchConfiguration(batchWindow: .milliseconds(25)),
         deliver: { (b) in collector.receive(b) })
       defer { backend.stop() }
@@ -83,7 +83,7 @@
       defer { removeDirectory(root) }
       try write("a", to: root + "/a.txt")
       let collector = BatchCollector()
-      let backend = try InotifyBackend(
+      let backend = try LinuxInotifyBackend(
         configuration: WatchConfiguration(batchWindow: .milliseconds(25)),
         deliver: { (b) in collector.receive(b) })
       defer { backend.stop() }
@@ -101,7 +101,7 @@
       let root = try makeTemporaryDirectory()
       defer { removeDirectory(root) }
       let collector = BatchCollector()
-      let backend = try InotifyBackend(
+      let backend = try LinuxInotifyBackend(
         configuration: WatchConfiguration(batchWindow: .milliseconds(25)),
         deliver: { (b) in collector.receive(b) })
       defer { backend.stop() }
@@ -118,7 +118,7 @@
 
     @Test func watchInstallationFailuresFromResourceExhaustionAreSignaled() throws {
       let collector = BatchCollector()
-      let backend = try InotifyBackend(
+      let backend = try LinuxInotifyBackend(
         configuration: WatchConfiguration(batchWindow: .milliseconds(25)),
         deliver: { (b) in collector.receive(b) })
       defer { backend.stop() }
@@ -137,7 +137,7 @@
       let root = try makeTemporaryDirectory()
       defer { removeDirectory(root) }
       try makeDirectory(root + "/sub")
-      let backend = try InotifyBackend(
+      let backend = try LinuxInotifyBackend(
         configuration: WatchConfiguration(batchWindow: .milliseconds(25)), deliver: { _ in })
       defer { backend.stop() }
       backend.setRoots([root])
@@ -152,7 +152,7 @@
     @Test func stopIsIdempotentAndDisablesRootReplacement() throws {
       let root = try makeTemporaryDirectory()
       defer { removeDirectory(root) }
-      let backend = try InotifyBackend(
+      let backend = try LinuxInotifyBackend(
         configuration: WatchConfiguration(), deliver: { _ in })
       backend.setRoots([root])
       backend.stop()
@@ -168,13 +168,13 @@
       let limit = Int(limitText.trimmingCharacters(in: .whitespacesAndNewlines)) ?? 128
       try #require(limit <= 4096, "instance limit too high to exhaust in a test")
 
-      var backends: [InotifyBackend] = []
+      var backends: [LinuxInotifyBackend] = []
       defer { for b in backends { b.stop() } }
       var thrown: (any Error)? = nil
       for _ in 0 ... limit {
         do {
           backends.append(
-            try InotifyBackend(configuration: WatchConfiguration(), deliver: { _ in }))
+            try LinuxInotifyBackend(configuration: WatchConfiguration(), deliver: { _ in }))
         } catch {
           thrown = error
           break

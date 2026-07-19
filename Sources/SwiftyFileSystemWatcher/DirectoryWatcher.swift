@@ -30,11 +30,12 @@ public struct DirectoryWatcher: ~Copyable, Sendable {
     onBatch: @escaping @Sendable (EventBatch) -> Void
   ) throws {
     #if os(Linux)
-      self.backend = try InotifyBackend(configuration: configuration, deliver: onBatch)
+      self.backend = try LinuxInotifyBackend(configuration: configuration, deliver: onBatch)
     #elseif os(macOS)
-      self.backend = FSEventsBackend(configuration: configuration, deliver: onBatch)
+      self.backend = MacOSFSEventsBackend(configuration: configuration, deliver: onBatch)
     #elseif os(Windows)
-      self.backend = ReadDirectoryChangesBackend(configuration: configuration, deliver: onBatch)
+      self.backend = WindowsReadDirectoryChangesBackend(
+        configuration: configuration, deliver: onBatch)
     #else
       #error("SwiftyFileSystemWatcher supports Linux, macOS, and Windows")
     #endif
