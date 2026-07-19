@@ -38,7 +38,7 @@ final class BatchCollector: @unchecked Sendable {
     let deadline = Date().addingTimeInterval(timeout)
     while Date() < deadline {
       if predicate(events) { return true }
-      usleep(20_000)
+      Thread.sleep(forTimeInterval: 0.02)
     }
     return predicate(events)
   }

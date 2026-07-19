@@ -61,7 +61,7 @@ import Testing
 
     try makeDirectory(root + "/a/b")
     // Give slower platforms a moment to attach the new directories to the watch.
-    usleep(200_000)
+    Thread.sleep(forTimeInterval: 0.2)
     try write("x", to: root + "/a/b/x.txt")
     #expect(collector.waitForEvent(path: root + "/a/b/x.txt", kind: .created))
     watcher.stop()
@@ -151,7 +151,7 @@ import Testing
 
     try makeDirectory(root + "/.git")
     try makeDirectory(root + "/src")
-    usleep(200_000)
+    Thread.sleep(forTimeInterval: 0.2)
     try write("x", to: root + "/.git/config")
     try write("y", to: root + "/src/main.txt")
     #expect(collector.waitForEvent(path: root + "/src/main.txt", kind: .created))
@@ -191,11 +191,11 @@ import Testing
     }
 
     watcher.setRoots([b])
-    usleep(200_000)
+    Thread.sleep(forTimeInterval: 0.2)
     try write("x", to: a + "/x.txt")
     try write("y", to: b + "/y.txt")
     #expect(collector.waitForEvent(path: b + "/y.txt", kind: .created))
-    usleep(300_000)
+    Thread.sleep(forTimeInterval: 0.3)
     #expect(!collector.events.contains { (e) in e.path.hasPrefix(a + "/") })
     watcher.stop()
   }
@@ -210,7 +210,7 @@ import Testing
 
     watcher.stop()
     try write("x", to: root + "/x.txt")
-    usleep(500_000)
+    Thread.sleep(forTimeInterval: 0.5)
     #expect(collector.events.isEmpty)
   }
 

@@ -6,13 +6,16 @@ import Foundation
   import Darwin
 #endif
 
-/// Creates a fresh temporary directory and returns its path.
+/// Creates a fresh temporary directory and returns its canonical (symlink-free) path.
+///
+/// The path is canonicalized because platform watch facilities (notably FSEvents) report real
+/// paths, and on macOS the temporary directory lies behind the `/var` symlink.
 func makeTemporaryDirectory() throws -> String {
+  let base = FileManager.default.temporaryDirectory.resolvingSymlinksInPath()
   let path =
-    FileManager.default.temporaryDirectory
-    .appendingPathComponent("SwiftyFileSystemWatcherTests-" + UUID().uuidString).path
+    base.appendingPathComponent("SwiftyFileSystemWatcherTests-" + UUID().uuidString).path
   try FileManager.default.createDirectory(atPath: path, withIntermediateDirectories: true)
-  return path
+  return path.replacingOccurrences(of: "\\", with: "/")
 }
 
 /// Removes the directory at `path`, ignoring failures.

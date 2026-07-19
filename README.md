@@ -56,7 +56,9 @@ language server that needs to watch workspace trees reliably on all three platfo
 - **Event kinds are advisory.** Kernels coalesce and reorder; an atomic save can surface as
   `created`, a write during an overflow as `created` instead of `modified`. Re-read the file;
   never branch on the kind for content decisions.
-- Paths are absolute; on Windows they are normalized to forward slashes.
+- Paths are absolute; on Windows they are normalized to forward slashes. Give roots as
+  canonical (symlink-free) paths: event paths are derived from the kernel's view, which
+  resolves symlinks (e.g. `/var` vs `/private/var` on macOS).
 - Files present when a root starts being watched are indexed silently, not reported.
 - Symbolic links are not followed.
 - `onBatch` runs on an internal serial queue; it may call `setRoots` but should not block.
