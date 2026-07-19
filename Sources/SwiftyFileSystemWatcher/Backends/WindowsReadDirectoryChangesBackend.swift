@@ -14,7 +14,7 @@
   /// Safety of `@unchecked Sendable`: all mutable state is confined to `queue` except the
   /// worker's own resources, which no other thread touches; the immutable stored properties
   /// are either `Sendable` or thread-safe (`EventAccumulator`).
-  final class WindowsReadDirectoryChangesBackend: WatcherBackend, @unchecked Sendable {
+  internal final class WindowsReadDirectoryChangesBackend: WatcherBackend, @unchecked Sendable {
 
     /// The changes the kernel is asked to report.
     private static let notifyFilter = DWORD(
@@ -58,7 +58,7 @@
     private var stopped = false
 
     /// Creates a backend delivering batches to `deliver`, with no roots watched yet.
-    init(
+    internal init(
       configuration: WatchConfiguration,
       deliver: @escaping @Sendable (EventBatch) -> Void
     ) {
@@ -67,7 +67,7 @@
         stateQueue: queue, window: configuration.batchWindow, deliver: deliver)
     }
 
-    func setRoots(_ newRoots: [String]) {
+    internal func setRoots(_ newRoots: [String]) {
       queue.sync { [self] in
         guard !stopped else { return }
         stopWorker()
@@ -82,7 +82,7 @@
       }
     }
 
-    func stop() {
+    internal func stop() {
       queue.sync { [self] in
         guard !stopped else { return }
         stopped = true

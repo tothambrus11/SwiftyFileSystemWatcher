@@ -14,7 +14,7 @@
   /// Safety of `@unchecked Sendable`: all mutable state is confined to `queue`, which is also
   /// the stream's dispatch queue; the immutable stored properties are either `Sendable` or
   /// thread-safe (`EventAccumulator`).
-  final class MacOSFSEventsBackend: WatcherBackend, @unchecked Sendable {
+  internal final class MacOSFSEventsBackend: WatcherBackend, @unchecked Sendable {
 
     /// The serial queue confining all mutable state and running the stream's callback.
     private let queue = DispatchQueue(label: "swifty-file-system-watcher.fsevents")
@@ -46,7 +46,7 @@
     private var stopped = false
 
     /// Creates a backend delivering batches to `deliver`, with no roots watched yet.
-    init(
+    internal init(
       configuration: WatchConfiguration,
       deliver: @escaping @Sendable (EventBatch) -> Void
     ) {
@@ -60,7 +60,7 @@
     // deadlock. State transitions stay on `queue`; a stream created concurrently with a
     // conflicting `setRoots` or `stop` is detected at installation time and discarded.
 
-    func setRoots(_ newRoots: [String]) {
+    internal func setRoots(_ newRoots: [String]) {
       let old: FSEventStreamRef? = queue.sync { [self] in
         guard !stopped else { return nil }
         let o = stream
@@ -100,7 +100,7 @@
       if !accepted { release(s) }
     }
 
-    func stop() {
+    internal func stop() {
       let old: FSEventStreamRef? = queue.sync { [self] in
         guard !stopped else { return nil }
         stopped = true

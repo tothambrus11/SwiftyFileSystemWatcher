@@ -2,7 +2,7 @@
 ///
 /// A backend is a reference type because it owns non-copyable kernel resources (file
 /// descriptors, event streams) whose lifetime outlives any single call.
-protocol WatcherBackend: AnyObject, Sendable {
+internal protocol WatcherBackend: AnyObject, Sendable {
 
   /// Replaces the set of recursively watched root directories.
   ///

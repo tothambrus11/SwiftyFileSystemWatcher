@@ -9,7 +9,7 @@ import Dispatch
 /// All methods must be called on the serial queue given at initialization. Batches are handed
 /// to `deliver` on a separate serial queue so consumers may call back into the watcher (e.g.
 /// `setRoots`) without deadlocking.
-final class EventAccumulator: @unchecked Sendable {
+internal final class EventAccumulator: @unchecked Sendable {
 
   /// The serial queue confining this instance's mutable state.
   private let stateQueue: DispatchQueue
@@ -33,7 +33,7 @@ final class EventAccumulator: @unchecked Sendable {
   private var flushScheduled = false
 
   /// Creates an instance confined to `stateQueue`, delivering batches to `deliver`.
-  init(
+  internal init(
     stateQueue: DispatchQueue, window: Duration,
     deliver: @escaping @Sendable (EventBatch) -> Void
   ) {
@@ -43,19 +43,19 @@ final class EventAccumulator: @unchecked Sendable {
   }
 
   /// Records `event`, dropping it if it repeats the previously recorded event.
-  func append(_ event: FileSystemEvent) {
+  internal func append(_ event: FileSystemEvent) {
     if pending.last != event { pending.append(event) }
     scheduleFlush()
   }
 
   /// Records that events may have been lost; the next batch reports it.
-  func noteDroppedEvents() {
+  internal func noteDroppedEvents() {
     dropped = true
     scheduleFlush()
   }
 
   /// Stops delivering batches and discards pending events.
-  func invalidate() {
+  internal func invalidate() {
     deliver = nil
     pending = []
     dropped = false

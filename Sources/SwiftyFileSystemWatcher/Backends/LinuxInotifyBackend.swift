@@ -12,7 +12,7 @@
   ///
   /// Safety of `@unchecked Sendable`: all mutable state is confined to `queue`; the immutable
   /// stored properties are either `Sendable` or thread-safe (`EventAccumulator`).
-  final class LinuxInotifyBackend: WatcherBackend, @unchecked Sendable {
+  internal final class LinuxInotifyBackend: WatcherBackend, @unchecked Sendable {
 
     // inotify constants (asm-generic/inotify.h, fcntl.h); spelled here because Glibc's
     // importer does not reliably expose the macros.
@@ -70,7 +70,7 @@
     private var suppressesOverflowResynchronization = false
 
     /// Creates a backend delivering batches to `deliver`, with no roots watched yet.
-    init(
+    internal init(
       configuration: WatchConfiguration,
       deliver: @escaping @Sendable (EventBatch) -> Void
     ) throws {
@@ -88,7 +88,7 @@
       self.source = s
     }
 
-    func setRoots(_ newRoots: [String]) {
+    internal func setRoots(_ newRoots: [String]) {
       queue.sync { [self] in
         guard !stopped else { return }
         roots = newRoots.map(normalized)
@@ -113,7 +113,7 @@
       suppressesOverflowResynchronization = false
     }
 
-    func stop() {
+    internal func stop() {
       queue.sync { [self] in
         guard !stopped else { return }
         stopped = true
@@ -156,7 +156,7 @@
     /// Resource exhaustion (`max_user_watches`) means part of the tree is unobserved, which
     /// consumers must learn about; a vanished directory is ordinary racing churn that the
     /// parent's events reconcile.
-    func recordWatchInstallationFailure(code: Int32) {
+    internal func recordWatchInstallationFailure(code: Int32) {
       guard code == ENOSPC || code == ENOMEM else { return }
       queue.async { [self] in accumulator.noteDroppedEvents() }
     }
@@ -187,18 +187,18 @@
 
     /// Processes a synthetic kernel event, for exercising paths that real kernels produce
     /// non-deterministically (queue overflows, watch invalidations).
-    func injectForTesting(mask: UInt32, name: String, descriptor d: Int32) {
+    internal func injectForTesting(mask: UInt32, name: String, descriptor d: Int32) {
       queue.sync { process(mask: mask, name: name, in: d) }
     }
 
     /// Returns the watch descriptor registered for `directory`, if any; for tests.
-    func watchDescriptorForTesting(of directory: String) -> Int32? {
+    internal func watchDescriptorForTesting(of directory: String) -> Int32? {
       queue.sync { descriptorByPath[directory] }
     }
 
     /// Simulates an overflow arriving while a rebuild drains its own teardown events, which
     /// real kernels produce only on trees too large for tests; for tests.
-    func injectOverflowDuringRebuildForTesting() {
+    internal func injectOverflowDuringRebuildForTesting() {
       queue.sync {
         suppressesOverflowResynchronization = true
         process(mask: Self.inQueueOverflow, name: "", in: -1)

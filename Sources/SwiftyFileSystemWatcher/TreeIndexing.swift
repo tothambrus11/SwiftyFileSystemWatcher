@@ -6,7 +6,7 @@
 /// unconditionally, so callers decide whether roots bypass the filter.
 ///
 /// Runs in time proportional to the size of the subtree.
-func indexTree(
+internal func indexTree(
   at directory: String, configuration: WatchConfiguration, index: inout DirectoryIndex,
   accumulator: EventAccumulator, reportingFiles: Bool,
   visitingDirectoriesWith visit: (String) -> Void = { _ in }
@@ -36,7 +36,7 @@ func indexTree(
 /// intermediate directory admitted by `configuration`.
 ///
 /// Runs one filter call per path component below the root.
-func isAdmissibleDirectory(
+internal func isAdmissibleDirectory(
   _ directory: String, roots: [String], configuration: WatchConfiguration
 ) -> Bool {
   guard
@@ -54,7 +54,7 @@ func isAdmissibleDirectory(
 }
 
 /// Returns the directory and last component of `path`.
-func splitPath(_ path: String) -> (directory: String, name: String) {
+internal func splitPath(_ path: String) -> (directory: String, name: String) {
   guard let i = path.lastIndex(of: "/") else { return ("", path) }
   return (String(path[..<i]), String(path[path.index(after: i)...]))
 }
