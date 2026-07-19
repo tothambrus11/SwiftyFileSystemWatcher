@@ -225,6 +225,24 @@ import Testing
     watcher.stop()
   }
 
+  @Test func manyRootsAreAllWatched() throws {
+    var roots: [String] = []
+    defer { for r in roots { removeDirectory(r) } }
+    for _ in 0 ..< 70 { roots.append(try makeTemporaryDirectory()) }
+    let collector = BatchCollector()
+    let watcher = try DirectoryWatcher(roots: roots, configuration: configuration) { (b) in
+      collector.receive(b)
+    }
+
+    for (i, root) in roots.enumerated() { try write("x", to: root + "/f\(i).txt") }
+    for (i, root) in roots.enumerated() {
+      #expect(
+        collector.waitForEvent(path: root + "/f\(i).txt", kind: .created),
+        "missing event for root \(i)")
+    }
+    watcher.stop()
+  }
+
   @Test func setRootsReplacesTheWatchedTree() throws {
     let a = try makeTemporaryDirectory()
     let b = try makeTemporaryDirectory()

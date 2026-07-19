@@ -39,8 +39,14 @@
     /// The reported files under each watched directory.
     private var index = DirectoryIndex()
 
-    /// The manual-reset event signaling the current worker to exit, if one is running.
-    private var stopEvent: HANDLE?
+    /// The completion key identifying a posted shutdown request.
+    private static let shutdownKey = ULONG_PTR.max
+
+    /// The current worker's I/O completion port, if one is running.
+    ///
+    /// All roots' overlapped reads complete into this port; a packet posted with
+    /// `shutdownKey` tells the worker to exit.
+    private var port: HANDLE?
 
     /// Signaled when the current worker has released its resources.
     private var workerExited: DispatchSemaphore?
@@ -97,42 +103,42 @@
       /// The directory handle opened for overlapped listing.
       let handle: HANDLE
 
-      /// The manual-reset event signaled on I/O completion.
-      let event: HANDLE
-
       /// The overlapped-I/O control block; stable storage for the async operation's lifetime.
       let overlapped: UnsafeMutablePointer<OVERLAPPED>
 
       /// The kernel-filled event buffer; stable storage for the async operation's lifetime.
       let buffer: UnsafeMutableRawPointer
 
-      /// Creates an instance taking ownership of `handle` and `event`.
-      init(root: String, handle: HANDLE, event: HANDLE) {
+      /// `true` iff a read is queued whose completion packet has not been dequeued yet.
+      ///
+      /// While `true`, the kernel may still write `buffer`, so the storage must not be
+      /// released.
+      var hasPendingRead = false
+
+      /// Creates an instance taking ownership of `handle`.
+      init(root: String, handle: HANDLE) {
         self.root = root
         self.handle = handle
-        self.event = event
         self.overlapped = .allocate(capacity: 1)
         self.overlapped.initialize(to: OVERLAPPED())
-        self.overlapped.pointee.hEvent = event
         self.buffer = .allocate(
           byteCount: ReadDirectoryChangesBackend.bufferSize,
           alignment: MemoryLayout<DWORD>.alignment)
       }
 
-      /// Cancels pending I/O and releases all resources.
+      /// Releases all resources.
+      ///
+      /// - Requires: `hasPendingRead` is `false`.
       func release() {
-        CancelIo(handle)
-        var transferred = DWORD(0)
-        _ = GetOverlappedResult(handle, overlapped, &transferred, true)
         CloseHandle(handle)
-        CloseHandle(event)
         overlapped.deallocate()
         buffer.deallocate()
       }
 
       /// Queues an overlapped `ReadDirectoryChangesW`; returns `false` on failure.
+      ///
+      /// Completion is delivered to the completion port the handle is associated with.
       func arm() -> Bool {
-        ResetEvent(event)
         var bytesReturned = DWORD(0)
         let ok = ReadDirectoryChangesW(
           handle, buffer, DWORD(ReadDirectoryChangesBackend.bufferSize), true,
@@ -157,47 +163,46 @@
     /// Starts a worker over `roots`; returns once the kernel watch is live for every root
     /// that could be opened.
     ///
-    /// At most 60 roots are watched (`WaitForMultipleObjects` multiplexes at most 64
-    /// handles); excess roots are dropped and signaled as dropped events.
+    /// Each root's overlapped reads complete into one I/O completion port, so the root count
+    /// is unbounded and dispatching a completion costs O(1) regardless of it.
     private func startWorker() {
       generation += 1
       let g = generation
-      guard let stop = CreateEventW(nil, true, false, nil) else {
+      guard let p = CreateIoCompletionPort(INVALID_HANDLE_VALUE, nil, 0, 1) else {
         accumulator.noteDroppedEvents()
         return
       }
       let exited = DispatchSemaphore(value: 0)
       let primed = DispatchSemaphore(value: 0)
-      stopEvent = stop
+      port = p
       workerExited = exited
-      if roots.count > 60 { accumulator.noteDroppedEvents() }
-      let watchedRoots = Array(roots.prefix(60))
+      let watchedRoots = roots
 
       /// A `HANDLE` transportable into the worker closure.
       ///
       /// Safety of `@unchecked Sendable`: `HANDLE` is a raw pointer, which Swift cannot prove
-      /// thread-safe; ownership protocol makes it so — the worker is the handle's only user
-      /// until `stopWorker` observes the exit semaphore.
-      struct StopHandle: @unchecked Sendable {
+      /// thread-safe; ownership protocol makes it so — the worker is the port's only reader,
+      /// and `stopWorker` closes it only after observing the exit semaphore.
+      struct PortHandle: @unchecked Sendable {
 
         /// The wrapped handle.
         let value: HANDLE
 
       }
-      let stopHandle = StopHandle(value: stop)
+      let portHandle = PortHandle(value: p)
 
       DispatchQueue.global(qos: .userInitiated).async { [weak self, watchedRoots] in
-        var contexts: [RootContext] = []
-        for root in watchedRoots {
-          guard let handle = Self.openDirectory(root),
-            let event = CreateEventW(nil, true, false, nil)
-          else {
+        var contexts: [ULONG_PTR: RootContext] = [:]
+        for (i, root) in watchedRoots.enumerated() {
+          guard let handle = Self.openDirectory(root) else {
             self?.noteOverflow(in: g)
             continue
           }
-          let context = RootContext(root: root, handle: handle, event: event)
-          if context.arm() {
-            contexts.append(context)
+          let context = RootContext(root: root, handle: handle)
+          let key = ULONG_PTR(i)
+          if CreateIoCompletionPort(handle, portHandle.value, key, 0) != nil, context.arm() {
+            context.hasPendingRead = true
+            contexts[key] = context
           } else {
             context.release()
             self?.noteOverflow(in: g)
@@ -205,40 +210,64 @@
         }
         primed.signal()
 
+        var shuttingDown = false
         while !contexts.isEmpty {
-          var waitHandles: [HANDLE?] = [stopHandle.value] + contexts.map { (c) in c.event }
-          let result = waitHandles.withUnsafeBufferPointer { (h) in
-            WaitForMultipleObjects(DWORD(h.count), h.baseAddress, false, DWORD(0xFFFF_FFFF))
-          }
-          let signaled = Int(result) - Int(WAIT_OBJECT_0)
-          if signaled == 0 { break }
-          guard signaled > 0, signaled <= contexts.count else {
-            // WAIT_FAILED or an abandoned handle: the watch is broken beyond repair here.
-            self?.noteOverflow(in: g)
+          var transferred = DWORD(0)
+          var key = ULONG_PTR(0)
+          var completed: LPOVERLAPPED? = nil
+          // While shutting down, the wait is bounded so a lost cancelation packet cannot
+          // hang the worker forever.
+          let timeout: DWORD = shuttingDown ? 5000 : DWORD(0xFFFF_FFFF)
+          let dequeued = GetQueuedCompletionStatus(
+            portHandle.value, &transferred, &key, &completed, timeout)
+
+          if !dequeued, completed == nil {
+            // Timeout or port-level failure; no packet was dequeued.
+            if !shuttingDown { self?.noteOverflow(in: g) }
             break
           }
-          let context = contexts[signaled - 1]
-
-          var transferred = DWORD(0)
-          if GetOverlappedResult(context.handle, context.overlapped, &transferred, false) {
-            if transferred == 0 {
-              // The kernel's buffer overflowed; events were lost.
-              self?.noteOverflow(in: g)
-            } else {
-              let changes = Self.parse(context.buffer, count: Int(transferred))
-              self?.enqueue(changes, under: context.root, in: g)
+          if key == ReadDirectoryChangesBackend.shutdownKey {
+            // Cancel every outstanding read; their completion packets drain below, after
+            // which the contexts' storage can be released safely.
+            shuttingDown = true
+            for (_, context) in contexts where context.hasPendingRead {
+              CancelIoEx(context.handle, context.overlapped)
             }
+            continue
           }
-          if !context.arm() {
-            // Only this root's watch died (e.g. the directory was deleted); the other
-            // roots keep their watches.
+          guard let context = contexts[key] else { continue }
+          context.hasPendingRead = false
+
+          if shuttingDown || !dequeued {
+            // Shutdown drain, or this root's read failed (e.g. its directory was deleted);
+            // either way only this root retires — the others keep their watches.
             context.release()
-            contexts.remove(at: signaled - 1)
+            contexts[key] = nil
+            if !shuttingDown { self?.noteOverflow(in: g) }
+            continue
+          }
+          if transferred == 0 {
+            // The kernel's buffer overflowed; events were lost.
+            self?.noteOverflow(in: g)
+          } else {
+            let changes = Self.parse(context.buffer, count: Int(transferred))
+            self?.enqueue(changes, under: context.root, in: g)
+          }
+          if context.arm() {
+            context.hasPendingRead = true
+          } else {
+            context.release()
+            contexts[key] = nil
             self?.noteOverflow(in: g)
           }
         }
 
-        for context in contexts { context.release() }
+        for (_, context) in contexts where !context.hasPendingRead {
+          context.release()
+        }
+        // Contexts still awaiting a packet are leaked deliberately: the kernel may yet
+        // write their buffers, and a use-after-free is worse than a bounded leak on this
+        // already-pathological path.
         exited.signal()
       }
 
@@ -247,14 +276,14 @@
 
     /// Signals the current worker to exit and waits for it to release its resources.
     private func stopWorker() {
-      guard let stop = stopEvent else { return }
-      SetEvent(stop)
+      guard let p = port else { return }
+      PostQueuedCompletionStatus(p, 0, Self.shutdownKey, nil)
       if workerExited?.wait(timeout: .now() + .seconds(5)) == .success {
-        CloseHandle(stop)
+        CloseHandle(p)
       }
-      // On timeout the handle is leaked deliberately: closing it while the worker may still
-      // be blocked in WaitForMultipleObjects would hand the worker a recycled handle.
-      stopEvent = nil
+      // On timeout the port handle is leaked deliberately: closing it while the worker may
+      // still be dequeuing would hand the worker a recycled handle.
+      port = nil
       workerExited = nil
       generation += 1
     }

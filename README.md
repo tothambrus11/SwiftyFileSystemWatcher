@@ -76,8 +76,8 @@ decisions.
 - Symbolic links are not followed.
 - `onBatch` runs on an internal serial queue; it may call `setRoots` but should not block.
 - When `DirectoryWatcher.init` or `setRoots(_:)` returns, the watch is live.
-- Windows watches at most 60 roots (a `WaitForMultipleObjects` limit); excess roots are
-  dropped and signaled via `mayHaveDroppedEvents`.
+- The root count is unbounded on every platform. On Windows each root costs one kernel
+  directory handle, with completions dispatched through a single I/O completion port.
 - Replacing a watched *root* directory itself: its files are reported deleted, and a
   successor directory already present at the root's path is re-attached (Linux/macOS). A
   root recreated later is not re-attached automatically — call `setRoots` to re-anchor.
