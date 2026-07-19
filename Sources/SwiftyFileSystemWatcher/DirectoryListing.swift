@@ -34,9 +34,15 @@ func fileType(at path: String) -> FileAttributeType? {
   (try? FileManager.default.attributesOfItem(atPath: path))?[.type] as? FileAttributeType
 }
 
-/// Returns `path` without trailing path separators, preserving a lone root separator.
+/// Returns `path` without trailing path separators, preserving a lone root separator and
+/// Windows drive roots (`C:/`).
 func normalized(_ path: String) -> String {
   var p = Substring(path)
-  while p.count > 1, p.hasSuffix("/") { p.removeLast() }
+  while p.count > 1, p.hasSuffix("/"), !p.dropLast().hasSuffix(":") { p.removeLast() }
   return String(p)
+}
+
+/// Returns the prefix that paths strictly below `directory` start with.
+func childPrefix(of directory: String) -> String {
+  directory.hasSuffix("/") ? directory : directory + "/"
 }

@@ -67,9 +67,12 @@
         stopWorker()
         index.removeAll()
         roots = newRoots.map { (r) in normalized(r.replacingOccurrences(of: "\\", with: "/")) }
-        for root in roots { indexTree(at: root, reportingFiles: false) }
         guard !roots.isEmpty else { return }
+        // Arm the kernel watch before scanning so no mutation can fall between the index's
+        // snapshot and the watch coming live. Worker events funnel through `queue.async`,
+        // so anything observed during the scan is classified after it, against the index.
         startWorker()
+        for root in roots { indexTree(at: root, reportingFiles: false) }
       }
     }
 
@@ -153,15 +156,22 @@
 
     /// Starts a worker over `roots`; returns once the kernel watch is live for every root
     /// that could be opened.
+    ///
+    /// At most 60 roots are watched (`WaitForMultipleObjects` multiplexes at most 64
+    /// handles); excess roots are dropped and signaled as dropped events.
     private func startWorker() {
       generation += 1
       let g = generation
-      guard let stop = CreateEventW(nil, true, false, nil) else { return }
+      guard let stop = CreateEventW(nil, true, false, nil) else {
+        accumulator.noteDroppedEvents()
+        return
+      }
       let exited = DispatchSemaphore(value: 0)
       let primed = DispatchSemaphore(value: 0)
       stopEvent = stop
       workerExited = exited
-      let watchedRoots = roots
+      if roots.count > 60 { accumulator.noteDroppedEvents() }
+      let watchedRoots = Array(roots.prefix(60))
 
       /// A `HANDLE` transportable into the worker closure.
       ///
@@ -181,19 +191,32 @@
         for root in watchedRoots {
           guard let handle = Self.openDirectory(root),
             let event = CreateEventW(nil, true, false, nil)
-          else { continue }
+          else {
+            self?.noteOverflow(in: g)
+            continue
+          }
           let context = RootContext(root: root, handle: handle, event: event)
-          if context.arm() { contexts.append(context) } else { context.release() }
+          if context.arm() {
+            contexts.append(context)
+          } else {
+            context.release()
+            self?.noteOverflow(in: g)
+          }
         }
         primed.signal()
 
-        var waitHandles: [HANDLE?] = [stopHandle.value] + contexts.map { (c) in c.event }
-        while true {
+        while !contexts.isEmpty {
+          var waitHandles: [HANDLE?] = [stopHandle.value] + contexts.map { (c) in c.event }
           let result = waitHandles.withUnsafeBufferPointer { (h) in
             WaitForMultipleObjects(DWORD(h.count), h.baseAddress, false, DWORD(0xFFFF_FFFF))
           }
           let signaled = Int(result) - Int(WAIT_OBJECT_0)
-          guard signaled > 0, signaled <= contexts.count else { break }
+          if signaled == 0 { break }
+          guard signaled > 0, signaled <= contexts.count else {
+            // WAIT_FAILED or an abandoned handle: the watch is broken beyond repair here.
+            self?.noteOverflow(in: g)
+            break
+          }
           let context = contexts[signaled - 1]
 
           var transferred = DWORD(0)
@@ -206,7 +229,13 @@
               self?.enqueue(changes, under: context.root, in: g)
             }
           }
-          guard context.arm() else { break }
+          if !context.arm() {
+            // Only this root's watch died (e.g. the directory was deleted); the other
+            // roots keep their watches.
+            context.release()
+            contexts.remove(at: signaled - 1)
+            self?.noteOverflow(in: g)
+          }
         }
 
         for context in contexts { context.release() }
@@ -220,8 +249,11 @@
     private func stopWorker() {
       guard let stop = stopEvent else { return }
       SetEvent(stop)
-      _ = workerExited?.wait(timeout: .now() + .seconds(5))
-      CloseHandle(stop)
+      if workerExited?.wait(timeout: .now() + .seconds(5)) == .success {
+        CloseHandle(stop)
+      }
+      // On timeout the handle is leaked deliberately: closing it while the worker may still
+      // be blocked in WaitForMultipleObjects would hand the worker a recycled handle.
       stopEvent = nil
       workerExited = nil
       generation += 1
@@ -251,12 +283,13 @@
         let nextOffset = entry.loadUnaligned(as: DWORD.self)
         let action = entry.loadUnaligned(fromByteOffset: 4, as: DWORD.self)
         let nameLength = Int(entry.loadUnaligned(fromByteOffset: 8, as: DWORD.self))
+        guard offset + 12 + nameLength <= count else { break }
         let units = UnsafeRawBufferPointer(start: entry.advanced(by: 12), count: nameLength)
           .withMemoryRebound(to: UInt16.self) { (u) in Array(u) }
         let name = String(decoding: units, as: UTF16.self)
         changes.append(
           Change(action: action, relativePath: name.replacingOccurrences(of: "\\", with: "/")))
-        if nextOffset == 0 { break }
+        if nextOffset < 12 { break }
         offset += Int(nextOffset)
       }
       return changes

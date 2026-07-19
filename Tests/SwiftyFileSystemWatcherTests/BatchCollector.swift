@@ -43,6 +43,18 @@ final class BatchCollector: @unchecked Sendable {
     return predicate(events)
   }
 
+  /// Returns `true` iff `predicate` holds for the received batches within `timeout` seconds.
+  func waitForBatches(
+    timeout: TimeInterval = 10, where predicate: ([EventBatch]) -> Bool
+  ) -> Bool {
+    let deadline = Date().addingTimeInterval(timeout)
+    while Date() < deadline {
+      if predicate(batches) { return true }
+      Thread.sleep(forTimeInterval: 0.02)
+    }
+    return predicate(batches)
+  }
+
   /// Returns `true` iff an event with `path` and `kind` was received within `timeout` seconds.
   func waitForEvent(
     path: String, kind: FileSystemEvent.Kind, timeout: TimeInterval = 10

@@ -22,7 +22,8 @@ struct SplitMix64: RandomNumberGenerator {
 
 }
 
-/// Returns the regular files under `root` (recursively), skipping hidden directories.
+/// Returns the regular files under `root` (recursively), skipping hidden directories and
+/// non-regular entries, matching the library's listing semantics.
 func filesOnDisk(under root: String) -> Set<String> {
   var result: Set<String> = []
   var frontier = [root]
@@ -30,14 +31,14 @@ func filesOnDisk(under root: String) -> Set<String> {
     let entries = (try? FileManager.default.contentsOfDirectory(atPath: directory)) ?? []
     for entry in entries {
       let path = directory + "/" + entry
-      var isDirectory: ObjCBool = false
-      guard FileManager.default.fileExists(atPath: path, isDirectory: &isDirectory) else {
-        continue
-      }
-      if isDirectory.boolValue {
+      let type = (try? FileManager.default.attributesOfItem(atPath: path))?[.type]
+      switch type as? FileAttributeType {
+      case .typeDirectory:
         if !entry.hasPrefix(".") { frontier.append(path) }
-      } else {
+      case .typeRegular:
         result.insert(path)
+      default:
+        continue
       }
     }
   }
@@ -160,6 +161,15 @@ struct RandomTreeMutator {
         try? FileManager.default.moveItem(
           atPath: d, toPath: parent + "/r" + String(nextID))
       }
+    case 97 ..< 99:
+      #if !os(Windows)
+        // Symbolic links are outside the files-only model and must produce no events.
+        if let f = files.randomElement(using: &random) {
+          nextID += 1
+          try? FileManager.default.createSymbolicLink(
+            atPath: target + "/link" + String(nextID), withDestinationPath: f)
+        }
+      #endif
     default:
       nextID += 1
       let hidden = target + "/.h" + String(nextID)

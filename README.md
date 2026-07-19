@@ -52,9 +52,13 @@ tests on all three platforms):
   the set of files that is on disk, once the tree is quiescent — including files under
   directories that were moved into or out of the tree, whose events are synthesized.
 - Only files admitted by `isFileIncluded` in directories admitted by `isDirectoryIncluded`
-  are reported; excluded directories are never even watched on Linux and macOS.
-- If the kernel drops events (queue overflow), the next batch has `mayHaveDroppedEvents`
-  set and the guarantees above are suspended until the consumer re-scans.
+  are reported; on Linux excluded directories are never even watched kernel-side, on macOS
+  and Windows they are filtered before classification.
+- If events may have been lost — a kernel queue overflow, or a root that could not be
+  watched — the next batch has `mayHaveDroppedEvents` set and the guarantees above are
+  suspended until the consumer re-scans.
+- `setRoots(_:)` re-anchors the guarantees: list the new roots after it returns and fold
+  subsequent events over that listing.
 
 Event *kinds* remain advisory: kernels coalesce rapid sequences, so an atomic save may
 surface as `created` or `modified`. Re-read the file; never branch on the kind for content
@@ -69,6 +73,8 @@ decisions.
 - Symbolic links are not followed.
 - `onBatch` runs on an internal serial queue; it may call `setRoots` but should not block.
 - When `DirectoryWatcher.init` or `setRoots(_:)` returns, the watch is live.
+- Windows watches at most 60 roots (a `WaitForMultipleObjects` limit); excess roots are
+  dropped and signaled via `mayHaveDroppedEvents`.
 
 ## Requirements
 

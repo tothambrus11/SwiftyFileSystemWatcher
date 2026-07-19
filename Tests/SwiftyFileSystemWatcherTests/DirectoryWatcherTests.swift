@@ -230,7 +230,7 @@ import Testing
           es.contains(FileSystemEvent(path: root + "/f\(i).txt", kind: .created))
         }
       })
-    #expect(collector.batches.count == 1)
+    #expect(collector.batches.count <= 2)
     watcher.stop()
   }
 
@@ -266,7 +266,7 @@ import Testing
     watcher.stop()
   }
 
-  @Test func streamingDeliversBatches() async throws {
+  @Test(.timeLimit(.minutes(1))) func streamingDeliversBatches() async throws {
     let root = try makeTemporaryDirectory()
     defer { removeDirectory(root) }
     let watcher = try DirectoryWatcher.streaming(roots: [root], configuration: configuration)
@@ -280,6 +280,34 @@ import Testing
     }
     #expect(received.contains(FileSystemEvent(path: root + "/x.txt", kind: .created)))
     watcher.stop()
+  }
+
+  @Test(.timeLimit(.minutes(1))) func streamFinishesWhenTheWatcherIsStopped() async throws {
+    let root = try makeTemporaryDirectory()
+    defer { removeDirectory(root) }
+    let watcher = try DirectoryWatcher.streaming(roots: [root], configuration: configuration)
+    let batches = watcher.batches
+    watcher.stop()
+    for await _ in batches {}
+  }
+
+  @Test func symbolicLinksProduceNoEvents() throws {
+    #if !os(Windows)
+      let root = try makeTemporaryDirectory()
+      defer { removeDirectory(root) }
+      try write("t", to: root + "/target.txt")
+      let collector = BatchCollector()
+      let watcher = try DirectoryWatcher(roots: [root], configuration: configuration) { (b) in
+        collector.receive(b)
+      }
+
+      try FileManager.default.createSymbolicLink(
+        atPath: root + "/link", withDestinationPath: root + "/target.txt")
+      try write("x", to: root + "/witness.txt")
+      #expect(collector.waitForEvent(path: root + "/witness.txt", kind: .created))
+      #expect(collector.events.allSatisfy { (e) in e.path != root + "/link" })
+      watcher.stop()
+    #endif
   }
 
 }

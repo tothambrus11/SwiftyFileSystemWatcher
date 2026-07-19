@@ -1,7 +1,8 @@
 /// Options controlling what a `DirectoryWatcher` reports and how it batches.
 public struct WatchConfiguration: Sendable {
 
-  /// The quiet period during which events are coalesced into a single batch before delivery.
+  /// The length of the coalescing window: events observed within this duration of a batch's
+  /// first event are delivered together.
   public var batchWindow: Duration
 
   /// Returns `true` iff the file at the given absolute path should be reported.

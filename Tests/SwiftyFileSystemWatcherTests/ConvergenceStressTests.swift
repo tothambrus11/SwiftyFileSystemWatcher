@@ -119,6 +119,79 @@ private func pollUntil(timeout: TimeInterval, _ condition: () -> Bool) -> Bool {
   return condition()
 }
 
+/// Returns `true` iff `condition` becomes true within five seconds, polling.
+func pollUntilFlagged(_ condition: () -> Bool) -> Bool {
+  let deadline = Date().addingTimeInterval(5)
+  while Date() < deadline {
+    if condition() { return true }
+    Thread.sleep(forTimeInterval: 0.02)
+  }
+  return condition()
+}
+
+/// Thread-safe storage giving a delivery callback access to the watcher it belongs to.
+///
+/// Safety of `@unchecked Sendable`: all access to `watcher` is under `lock`.
+final class WatcherHolder: @unchecked Sendable {
+
+  /// The lock guarding `watcher`.
+  private let lock = NSLock()
+
+  /// The held watcher, if any.
+  private var watcher: DirectoryWatcher?
+
+  /// Takes ownership of `newWatcher`.
+  func install(_ newWatcher: consuming DirectoryWatcher) {
+    lock.lock()
+    watcher = consume newWatcher
+    lock.unlock()
+  }
+
+  /// Replaces the held watcher's roots, if one is held.
+  func setRoots(_ roots: [String]) {
+    lock.lock()
+    watcher?.setRoots(roots)
+    lock.unlock()
+  }
+
+  /// Releases (and thereby stops) the held watcher.
+  func clear() {
+    lock.lock()
+    watcher = nil
+    lock.unlock()
+  }
+
+}
+
+/// A flag that trips exactly once.
+///
+/// Safety of `@unchecked Sendable`: all access to `tripped` is under `lock`.
+final class OnceFlag: @unchecked Sendable {
+
+  /// The lock guarding `tripped`.
+  private let lock = NSLock()
+
+  /// `true` iff the flag has tripped.
+  private var tripped = false
+
+  /// Trips the flag; returns `true` on the first call only.
+  func trip() -> Bool {
+    lock.lock()
+    defer { lock.unlock() }
+    if tripped { return false }
+    tripped = true
+    return true
+  }
+
+  /// `true` iff the flag has tripped.
+  var hasTripped: Bool {
+    lock.lock()
+    defer { lock.unlock() }
+    return tripped
+  }
+
+}
+
 extension DirectoryWatcherTests {
 
   @Test(arguments: [0x5EED_0001, 0xDEAD_BEEF, 0x0BAD_F00D] as [UInt64])
@@ -157,6 +230,34 @@ extension DirectoryWatcherTests {
     #expect(collector.waitForEvent(path: a + "/final-a.txt", kind: .created))
     #expect(collector.waitForEvent(path: b + "/final-b.txt", kind: .created))
     watcher.stop()
+  }
+
+  @Test func setRootsMayBeCalledFromTheDeliveryCallback() throws {
+    let a = try makeTemporaryDirectory()
+    let b = try makeTemporaryDirectory()
+    defer {
+      removeDirectory(a)
+      removeDirectory(b)
+    }
+    let holder = WatcherHolder()
+    let collector = BatchCollector()
+    let flipped = OnceFlag()
+    let watcher = try DirectoryWatcher(roots: [a]) { (batch) in
+      collector.receive(batch)
+      // Reentrant root replacement from the delivery callback must not deadlock.
+      if flipped.trip() { holder.setRoots([b]) }
+    }
+    holder.install(watcher)
+
+    try write("t", to: a + "/trigger.txt")
+    #expect(collector.waitForEvent(path: a + "/trigger.txt", kind: .created))
+    #expect(
+      pollUntilFlagged { flipped.hasTripped },
+      "delivery callback never ran")
+    Thread.sleep(forTimeInterval: 0.2)
+    try write("x", to: b + "/after-flip.txt")
+    #expect(collector.waitForEvent(path: b + "/after-flip.txt", kind: .created))
+    holder.clear()
   }
 
   @Test func concurrentSetRootsCallsAreSafe() throws {

@@ -59,12 +59,25 @@
         stream = nil
         index.removeAll()
         roots = newRoots.map(normalized)
-        for root in roots { indexTree(at: root, reportingFiles: false) }
         return o
       }
       release(old)
-      let watched: [String] = queue.sync { [self] in stopped ? [] : roots }
-      guard !watched.isEmpty, let s = makeStream(over: watched) else { return }
+
+      // Anchor the stream before scanning: the journal id taken here makes the stream replay
+      // everything that happens during the scan, so no mutation can fall between the index's
+      // snapshot and the watch coming live. Events replayed for already-scanned files are
+      // absorbed by the index-based classification (they surface as `modified` at worst).
+      let sinceWhen = FSEventsGetCurrentEventId()
+      let watched: [String] = queue.sync { [self] in
+        guard !stopped else { return [] }
+        for root in roots { indexTree(at: root, reportingFiles: false) }
+        return roots
+      }
+      guard !watched.isEmpty else { return }
+      guard let s = makeStream(over: watched, since: sinceWhen) else {
+        queue.sync { [self] in accumulator.noteDroppedEvents() }
+        return
+      }
       let accepted: Bool = queue.sync { [self] in
         guard !stopped, roots == watched, stream == nil else { return false }
         stream = s
@@ -88,12 +101,14 @@
 
     // MARK: - Stream lifecycle
 
-    /// Returns a started stream over `watchedRoots`, delivering to `queue`, or `nil` if the
-    /// system refuses the stream.
+    /// Returns a started stream over `watchedRoots` replaying events since `sinceWhen`,
+    /// delivering to `queue`, or `nil` if the system refuses the stream.
     ///
     /// The stream context retains the backend until the stream is invalidated, so a scheduled
     /// callback can never observe a deallocated backend.
-    private func makeStream(over watchedRoots: [String]) -> FSEventStreamRef? {
+    private func makeStream(
+      over watchedRoots: [String], since sinceWhen: FSEventStreamEventId
+    ) -> FSEventStreamRef? {
       var context = FSEventStreamContext(
         version: 0,
         info: Unmanaged.passUnretained(self).toOpaque(),
@@ -109,7 +124,7 @@
       guard
         let s = FSEventStreamCreate(
           kCFAllocatorDefault, fsEventsCallback, &context, watchedRoots as CFArray,
-          FSEventStreamEventId(kFSEventStreamEventIdSinceNow), 0.01,
+          sinceWhen, 0.01,
           FSEventStreamCreateFlags(flags))
       else { return nil }
       FSEventStreamSetDispatchQueue(s, queue)
@@ -128,7 +143,10 @@
     // MARK: - Event handling
 
     /// Processes one event for `rawPath` with `flags`; called on `queue`.
-    func process(path rawPath: String, flags: FSEventStreamEventFlags) {
+    ///
+    /// Directory events for subtrees not yet indexed trigger a scan proportional to the
+    /// subtree's size; all other events run in time proportional to the path's depth.
+    fileprivate func process(path rawPath: String, flags: FSEventStreamEventFlags) {
       guard !stopped else { return }
       let path = normalized(rawPath)
 
@@ -141,9 +159,12 @@
       if flags & FSEventStreamEventFlags(kFSEventStreamEventFlagItemIsDir) != 0 {
         if fileType(at: path) == .typeDirectory {
           let (parent, _) = splitPath(path)
-          if isAdmissible(parent), configuration.isDirectoryIncluded(path) {
-            // The directory appeared (or flags are stale); scanning either reports its files
-            // or finds them already indexed.
+          // Only unknown directories are scanned: a directory already in the index has been
+          // walked before, and changes beneath it arrive as their own file events. Without
+          // this, every metadata touch on a known directory would cost a subtree walk.
+          if isAdmissible(parent), configuration.isDirectoryIncluded(path),
+            !index.containsDirectory(path)
+          {
             indexTree(at: path, reportingFiles: true)
           }
         } else if index.containsDirectory(path) {

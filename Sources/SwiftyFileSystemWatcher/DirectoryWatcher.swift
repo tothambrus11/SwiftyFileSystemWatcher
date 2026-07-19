@@ -19,7 +19,10 @@ public struct DirectoryWatcher: ~Copyable, Sendable {
   /// observed. `onBatch` is called on an internal serial queue and should not block; it may
   /// call `setRoots` on this watcher.
   ///
-  /// - Requires: Elements of `roots` are absolute paths of existing directories.
+  /// Roots should be canonical (symlink-free) absolute paths of existing directories; a root
+  /// that cannot be watched (missing, or the platform's watch resources are exhausted) is
+  /// signaled through `EventBatch.mayHaveDroppedEvents` rather than an error.
+  ///
   /// - Throws: `WatchError` if the platform watch facility cannot be initialized.
   public init(
     roots: [String] = [],
@@ -45,9 +48,10 @@ public struct DirectoryWatcher: ~Copyable, Sendable {
   /// Replaces the set of watched root directories.
   ///
   /// When this method returns, the watch for the new roots is live. Batches for previously
-  /// watched roots may still be delivered if they were already in flight.
-  ///
-  /// - Requires: Elements of `roots` are absolute paths of existing directories.
+  /// watched roots may still be delivered if they were already in flight. Replacement
+  /// re-anchors the guarantees: consumers should list the new roots after this returns and
+  /// fold subsequent events over that listing, as events during the replacement are not
+  /// replayed. Roots follow the same rules as at initialization.
   public func setRoots(_ roots: [String]) {
     backend.setRoots(roots)
   }
@@ -70,6 +74,23 @@ extension DirectoryWatcher {
 
     /// The stream of event batches.
     public let batches: AsyncStream<EventBatch>
+
+    /// The continuation feeding `batches`, finished explicitly when the pair is destroyed.
+    private let continuation: AsyncStream<EventBatch>.Continuation
+
+    /// Creates an instance with the given properties.
+    fileprivate init(
+      watcher: consuming DirectoryWatcher, batches: AsyncStream<EventBatch>,
+      continuation: AsyncStream<EventBatch>.Continuation
+    ) {
+      self.watcher = watcher
+      self.batches = batches
+      self.continuation = continuation
+    }
+
+    deinit {
+      continuation.finish()
+    }
 
     /// Stops watching, consuming the pair; `batches` finishes.
     public consuming func stop() {}
@@ -95,7 +116,7 @@ extension DirectoryWatcher {
     let watcher = try DirectoryWatcher(roots: roots, configuration: configuration) { (batch) in
       continuation.yield(batch)
     }
-    return Streaming(watcher: watcher, batches: stream)
+    return Streaming(watcher: watcher, batches: stream, continuation: continuation)
   }
 
 }

@@ -27,9 +27,12 @@ struct DirectoryIndex {
 
   /// Stops tracking `directory` and its descendants, returning the paths of the files that
   /// were known under them, in deterministic order.
+  ///
+  /// Runs in time proportional to the total number of tracked directories, plus sorting the
+  /// removed paths.
   mutating func removeSubtree(at directory: String) -> [String] {
     var removed: [String] = []
-    let prefix = directory + "/"
+    let prefix = childPrefix(of: directory)
     for (key, names) in filesByDirectory where key == directory || key.hasPrefix(prefix) {
       filesByDirectory[key] = nil
       for name in names { removed.append(key + "/" + name) }
@@ -38,8 +41,10 @@ struct DirectoryIndex {
   }
 
   /// Returns the tracked directories at or below `directory`.
+  ///
+  /// Runs in time proportional to the total number of tracked directories.
   func directories(inSubtreeAt directory: String) -> [String] {
-    let prefix = directory + "/"
+    let prefix = childPrefix(of: directory)
     return filesByDirectory.keys.filter { (k) in k == directory || k.hasPrefix(prefix) }
   }
 

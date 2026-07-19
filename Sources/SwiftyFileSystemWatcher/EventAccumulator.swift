@@ -1,6 +1,10 @@
 import Dispatch
 
-/// A coalescer turning individual events into batches delivered after a quiet window.
+/// A coalescer turning individual events into batches.
+///
+/// Events observed within `window` of a batch's first event are delivered together: the
+/// window opens at the first event and closes at a fixed deadline, so under continuous
+/// activity one batch is emitted per window (a throttle, not a trailing-quiet debounce).
 ///
 /// All methods must be called on the serial queue given at initialization. Batches are handed
 /// to `deliver` on a separate serial queue so consumers may call back into the watcher (e.g.

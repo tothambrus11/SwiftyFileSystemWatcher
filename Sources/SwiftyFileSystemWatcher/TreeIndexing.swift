@@ -34,15 +34,20 @@ func indexTree(
 
 /// Returns `true` iff `directory` is a root in `roots` or lies under one with every
 /// intermediate directory admitted by `configuration`.
+///
+/// Runs one filter call per path component below the root.
 func isAdmissibleDirectory(
   _ directory: String, roots: [String], configuration: WatchConfiguration
 ) -> Bool {
-  guard let root = roots.first(where: { (r) in directory == r || directory.hasPrefix(r + "/") })
+  guard
+    let root = roots.first(where: { (r) in
+      directory == r || directory.hasPrefix(childPrefix(of: r))
+    })
   else { return false }
   if directory == root { return true }
   var current = root
-  for component in directory.dropFirst(root.count + 1).split(separator: "/") {
-    current += "/" + component
+  for component in directory.dropFirst(childPrefix(of: root).count).split(separator: "/") {
+    current = childPrefix(of: current) + component
     guard configuration.isDirectoryIncluded(current) else { return false }
   }
   return true

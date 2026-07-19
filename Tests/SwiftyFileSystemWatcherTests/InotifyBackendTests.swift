@@ -1,6 +1,7 @@
 #if os(Linux)
 
   import Foundation
+  import Glibc
   import Testing
 
   @testable import SwiftyFileSystemWatcher
@@ -27,12 +28,71 @@
 
       backend.injectForTesting(mask: queueOverflowMask, name: "", descriptor: -1)
       #expect(
-        collector.waitForEvents { _ in
-          collector.batches.contains { (b) in b.mayHaveDroppedEvents }
+        collector.waitForBatches { (bs) in
+          bs.contains { (b) in b.mayHaveDroppedEvents }
         })
-      // The re-synchronized watch still observes subsequent changes.
+      // The rebuilt watch still observes changes to previously watched files...
       try write("b", to: root + "/a.txt")
       #expect(collector.waitForEvent(path: root + "/a.txt", kind: .modified))
+      // ...and attaches subtrees created after the overflow.
+      try makeDirectory(root + "/fresh")
+      Thread.sleep(forTimeInterval: 0.2)
+      try write("c", to: root + "/fresh/new.txt")
+      #expect(collector.waitForEvent(path: root + "/fresh/new.txt", kind: .created))
+    }
+
+    @Test func unmountReportsIndexedFilesAsDeleted() throws {
+      let root = try makeTemporaryDirectory()
+      defer { removeDirectory(root) }
+      try makeDirectory(root + "/mnt")
+      try write("a", to: root + "/mnt/a.txt")
+      let collector = BatchCollector()
+      let backend = try InotifyBackend(
+        configuration: WatchConfiguration(batchWindow: .milliseconds(25)),
+        deliver: { (b) in collector.receive(b) })
+      defer { backend.stop() }
+      backend.setRoots([root])
+
+      let descriptor = try #require(backend.watchDescriptorForTesting(of: root + "/mnt"))
+      backend.injectForTesting(mask: 0x2000, name: "", descriptor: descriptor)
+      #expect(collector.waitForEvent(path: root + "/mnt/a.txt", kind: .deleted))
+    }
+
+    @Test func moveSelfOfAReplacedDirectoryDoesNotTearDownItsSuccessor() throws {
+      let root = try makeTemporaryDirectory()
+      defer { removeDirectory(root) }
+      try makeDirectory(root + "/sub")
+      try write("a", to: root + "/sub/a.txt")
+      let collector = BatchCollector()
+      let backend = try InotifyBackend(
+        configuration: WatchConfiguration(batchWindow: .milliseconds(25)),
+        deliver: { (b) in collector.receive(b) })
+      defer { backend.stop() }
+      backend.setRoots([root])
+
+      // A move-self event whose recorded path still holds a directory (the descriptor was
+      // recycled onto a successor) must not synthesize deletions for the successor's files.
+      let descriptor = try #require(backend.watchDescriptorForTesting(of: root + "/sub"))
+      backend.injectForTesting(mask: 0x800, name: "", descriptor: descriptor)
+      Thread.sleep(forTimeInterval: 0.2)
+      #expect(collector.events.isEmpty)
+    }
+
+    @Test func watchInstallationFailuresFromResourceExhaustionAreSignaled() throws {
+      let collector = BatchCollector()
+      let backend = try InotifyBackend(
+        configuration: WatchConfiguration(batchWindow: .milliseconds(25)),
+        deliver: { (b) in collector.receive(b) })
+      defer { backend.stop() }
+
+      backend.recordWatchInstallationFailure(code: ENOENT)
+      Thread.sleep(forTimeInterval: 0.2)
+      #expect(collector.batches.isEmpty, "a vanished directory is routine churn, not loss")
+      backend.recordWatchInstallationFailure(code: ENOSPC)
+      #expect(
+        collector.waitForBatches { (bs) in
+          bs.contains { (b) in b.mayHaveDroppedEvents }
+        })
     }
 
     @Test func kernelRemovedWatchIsForgotten() throws {

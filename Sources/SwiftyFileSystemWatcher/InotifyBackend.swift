@@ -88,13 +88,19 @@
     func setRoots(_ newRoots: [String]) {
       queue.sync { [self] in
         guard !stopped else { return }
-        for (d, _) in pathByDescriptor { inotify_rm_watch(descriptor, d) }
-        pathByDescriptor.removeAll()
-        descriptorByPath.removeAll()
-        index.removeAll()
         roots = newRoots.map(normalized)
-        for root in roots { addTree(at: root, reportingFiles: false) }
+        rebuildWatchesLocked()
       }
+    }
+
+    /// Removes every watch and mapping, then re-registers watches under `roots` without
+    /// reporting; must run on `queue`.
+    private func rebuildWatchesLocked() {
+      for (d, _) in pathByDescriptor { inotify_rm_watch(descriptor, d) }
+      pathByDescriptor.removeAll()
+      descriptorByPath.removeAll()
+      index.removeAll()
+      for root in roots { addTree(at: root, reportingFiles: false) }
     }
 
     func stop() {
@@ -127,9 +133,22 @@
     private func addWatch(at directory: String) {
       guard descriptorByPath[directory] == nil else { return }
       let d = inotify_add_watch(descriptor, directory, Self.watchMask)
-      guard d >= 0 else { return }
+      guard d >= 0 else {
+        recordWatchInstallationFailure(code: errno)
+        return
+      }
       pathByDescriptor[d] = directory
       descriptorByPath[directory] = d
+    }
+
+    /// Reacts to a failed watch registration with error `code`; callable from any thread.
+    ///
+    /// Resource exhaustion (`max_user_watches`) means part of the tree is unobserved, which
+    /// consumers must learn about; a vanished directory is ordinary racing churn that the
+    /// parent's events reconcile.
+    func recordWatchInstallationFailure(code: Int32) {
+      guard code == ENOSPC || code == ENOMEM else { return }
+      queue.async { [self] in accumulator.noteDroppedEvents() }
     }
 
     /// Unwatches `directory` and its descendants, reporting their indexed files as deleted.
@@ -145,11 +164,13 @@
       }
     }
 
-    /// Rebuilds the index and re-registers watches under all roots without reporting, after an
-    /// event-queue overflow.
+    /// Rebuilds all watches and the index from scratch after an event-queue overflow.
+    ///
+    /// A full teardown is required, not just re-adding: a directory moved out of the tree
+    /// during the overflow would otherwise keep a live watch mapped to its stale in-tree
+    /// path, reporting phantom events even after the consumer re-scans.
     private func resynchronize() {
-      index.removeAll()
-      for root in roots { addTree(at: root, reportingFiles: false) }
+      rebuildWatchesLocked()
     }
 
     // MARK: - Testing support
@@ -193,6 +214,7 @@
             b.loadUnaligned(fromByteOffset: offset + 12, as: UInt32.self)
           )
         }
+        guard offset + headerSize + Int(nameLength) <= count else { break }
         let nameBytes = buffer[(offset + headerSize) ..< (offset + headerSize + Int(nameLength))]
         offset += headerSize + Int(nameLength)
         let name = String(decoding: nameBytes.prefix(while: { $0 != 0 }), as: UTF8.self)
@@ -218,9 +240,17 @@
       }
       guard let directory = pathByDescriptor[eventDescriptor] else { return }
 
-      if mask & (Self.inDeleteSelf | Self.inMoveSelf | Self.inUnmount) != 0 {
-        // The watched directory itself is gone or was moved to an unknown location.
+      if mask & Self.inUnmount != 0 {
+        // The file system beneath the watch vanished; the mount-point directory may remain.
         removeTree(at: directory)
+        return
+      }
+      if mask & (Self.inDeleteSelf | Self.inMoveSelf) != 0 {
+        // The watched directory itself is gone or was moved to an unknown location. If a
+        // directory still exists at the recorded path, another watch already owns it (the
+        // parent's paired moved-from/moved-to events re-registered it); tearing it down
+        // again would falsely report its files deleted.
+        if fileType(at: directory) != .typeDirectory { removeTree(at: directory) }
         return
       }
 
@@ -244,8 +274,10 @@
         // Any non-delete event on an indexed file means its contents may have changed —
         // including a rename onto it, which is how editors save atomically.
         accumulator.append(FileSystemEvent(path: path, kind: .modified))
-      } else {
+      } else if fileType(at: path) == .typeRegular {
         // First sighting, whether by creation or by a write we had no creation event for.
+        // The type check keeps symbolic links, sockets, and other non-regular entries out,
+        // matching the scanner's files-only model on every platform.
         index.addFile(named: name, in: directory)
         accumulator.append(FileSystemEvent(path: path, kind: .created))
       }
