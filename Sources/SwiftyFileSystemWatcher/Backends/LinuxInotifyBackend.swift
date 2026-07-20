@@ -91,7 +91,7 @@
     internal func setRoots(_ newRoots: [String]) {
       queue.sync { [self] in
         guard !stopped else { return }
-        roots = newRoots.map(normalized)
+        roots = newRoots.map(canonicalizedDirectory)
         rebuildWatchesLocked()
       }
     }

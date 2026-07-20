@@ -66,7 +66,7 @@
         let o = stream
         stream = nil
         index.removeAll()
-        roots = newRoots.map(normalized)
+        roots = newRoots.map(canonicalizedDirectory)
         // Longest kernel prefix first, so a root nested (via symlinks) inside another root's
         // resolved tree wins over the enclosing root's shorter prefix.
         kernelPrefixes = roots.compactMap { (r) -> (kernel: String, root: String)? in

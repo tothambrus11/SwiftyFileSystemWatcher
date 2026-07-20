@@ -54,7 +54,7 @@ extension WatchConfiguration {
   /// Runs in time proportional to the total size of the admitted trees.
   public func admittedFiles(under roots: [String]) -> Set<String> {
     var result: Set<String> = []
-    var frontier = roots.map(normalized)
+    var frontier = roots.map(canonicalizedDirectory)
     while let directory = frontier.popLast() {
       let listing = listDirectory(at: directory)
       for name in listing.files {

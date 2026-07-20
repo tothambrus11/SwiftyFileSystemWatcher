@@ -72,7 +72,7 @@
         guard !stopped else { return }
         stopWorker()
         index.removeAll()
-        roots = newRoots.map { (r) in normalized(r.replacingOccurrences(of: "\\", with: "/")) }
+        roots = newRoots.map(canonicalizedDirectory)
         guard !roots.isEmpty else { return }
         // Arm the kernel watch before scanning so no mutation can fall between the index's
         // snapshot and the watch coming live. Worker events funnel through `queue.async`,

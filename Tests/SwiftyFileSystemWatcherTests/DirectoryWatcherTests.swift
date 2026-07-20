@@ -243,6 +243,28 @@ import Testing
     watcher.stop()
   }
 
+  @Test func admittedFilesSpellsPathsExactlyAsEventsDo() throws {
+    // The adapter folds overflow-recovery diffs of `admittedFiles` against event paths, so the
+    // two entry points must agree on every path's spelling on every platform (e.g. separator
+    // canonicalization). A root given with a trailing separator stresses concatenation.
+    let root = try makeTemporaryDirectory()
+    defer { removeDirectory(root) }
+    try makeDirectory(root + "/pkg/inner")
+    let collector = BatchCollector()
+    let watcher = try DirectoryWatcher(roots: [root + "/"], configuration: configuration) { (b) in
+      collector.receive(b)
+    }
+
+    try write("a", to: root + "/pkg/a.txt")
+    try write("b", to: root + "/pkg/inner/b.txt")
+    #expect(collector.waitForEvent(path: root + "/pkg/inner/b.txt", kind: .created))
+    #expect(collector.waitForEvent(path: root + "/pkg/a.txt", kind: .created))
+
+    let reported = Set(collector.events.filter { (e) in e.kind == .created }.map(\.path))
+    let admitted = configuration.admittedFiles(under: [root + "/"])
+    #expect(admitted == reported)
+  }
+
   @Test func setRootsReplacesTheWatchedTree() throws {
     let a = try makeTemporaryDirectory()
     let b = try makeTemporaryDirectory()
